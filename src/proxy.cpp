@@ -29,6 +29,7 @@
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
+static HWND g_gameWindow;  // focus window of the game device
 void Log(const char* fmt, ...)
 {
     if (!g_log) return;
@@ -350,6 +351,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         frames = 0;
     }
     MenuPad_OnPresent();
+    Gamepad_OnFrame(g_gameWindow);
     Trace_ProbeMenuManager();
     return o_Present(dev, sr, dr, w, rgn);
 }
@@ -541,7 +543,10 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDevice(IDirect3D9* d3d, UINT a, D3DDEV
 {
     HRESULT hr = o_CreateDevice(d3d, a, t, w, f, pp, out);
     Log("CreateDevice(flags 0x%lx, %ux%u) -> 0x%08lx", f, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0, hr);
-    if (SUCCEEDED(hr)) MenuPad_SetWindow(pp && pp->hDeviceWindow ? pp->hDeviceWindow : w);
+    if (SUCCEEDED(hr)) {
+        g_gameWindow = pp && pp->hDeviceWindow ? pp->hDeviceWindow : w;
+        MenuPad_SetWindow(g_gameWindow);
+    }
     if (SUCCEEDED(hr) && out && *out) {
         ReleaseShadows();
         g_waterPS = nullptr;
@@ -672,6 +677,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         p_sysCreate9 = GetProcAddress(g_sys, "Direct3DCreate9");
         p_sysCreate9Ex = GetProcAddress(g_sys, "Direct3DCreate9Ex");
     } else if (reason == DLL_PROCESS_DETACH) {
+        Gamepad_Shutdown();
         if (g_log) fclose(g_log);
     }
     return TRUE;

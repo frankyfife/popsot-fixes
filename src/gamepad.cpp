@@ -45,6 +45,7 @@ XInputGetState_t g_xinputGetState;
 // Controller state, refreshed at most once per millisecond tick.
 XINPUT_GAMEPAD g_pad;
 bool g_padConnected;
+DWORD g_padSlot;  // XInput slot of g_pad
 DWORD g_padTick;
 
 void RefreshPad()
@@ -59,6 +60,7 @@ void RefreshPad()
         if (g_xinputGetState(i, &st) != ERROR_SUCCESS) continue;
         g_pad = st.Gamepad;
         g_padConnected = true;
+        g_padSlot = i;
         static int loggedSlot = -1;
         if (loggedSlot != (int)i) { loggedSlot = (int)i; Log("gamepad: XInput controller in slot %lu", i); }
         return;
@@ -144,6 +146,70 @@ void __cdecl GetStickHook(int pad, float* out, int stick)
     }
 }
 
+// ---------------------------------------------------------------- vibration
+// The PC port removed force feedback: the AI script functions that rumble the pad
+// still exist and still pop their arguments, but call an empty function (0x563530,
+// shared by ~1000 stripped call sites). We redirect only their calls:
+//   id 0x1b63 small motor (0x498867, 0x49887f): cdecl (pad, frames)
+//   id 0x1b64 large motor (0x49892e):           cdecl (pad, strength 0..255, frames)
+// Like on Xbox (0x2dff20 / 0x2dff70, motors driven in 0xdc6a0 / 0xdc700) a motor runs
+// for the given number of game frames; pad must be 0. The menu option "Vibration"
+// still works on PC and stores its state at 0x7f157c.
+const DWORD kEmptyFunction = 0x00563530;
+const DWORD kSmallMotorCalls[] = { 0x00498867, 0x0049887f };
+const DWORD kLargeMotorCall = 0x0049892e;
+const int* const g_vibrationEnabled = (const int*)0x007f157c;
+
+typedef DWORD(WINAPI* XInputSetState_t)(DWORD, XINPUT_VIBRATION*);
+XInputSetState_t g_xinputSetState;
+int g_smallFrames, g_largeFrames;
+WORD g_largeSpeed;
+WORD g_lastLeft, g_lastRight;
+
+int g_loggedMotorCalls;
+
+void __cdecl SmallMotor(int pad, int frames)
+{
+    if (g_loggedMotorCalls < 20) { g_loggedMotorCalls++; Log("vibration: small motor pad %d frames %d", pad, frames); }
+    if (pad == 0) g_smallFrames = frames > 0 ? frames : 0;
+}
+
+void __cdecl LargeMotor(int pad, int strength, int frames)
+{
+    if (g_loggedMotorCalls < 20) {
+        g_loggedMotorCalls++;
+        Log("vibration: large motor pad %d strength %d frames %d", pad, strength, frames);
+    }
+    if (pad != 0) return;
+    g_largeFrames = frames > 0 ? frames : 0;
+    g_largeSpeed = strength > 255 ? 65535 : strength <= 0 ? 0 : (WORD)(strength * 65535 / 255);
+}
+
+void SetMotors(WORD left, WORD right)
+{
+    if (!g_xinputSetState || (left == g_lastLeft && right == g_lastRight)) return;
+    XINPUT_VIBRATION v = { left, right };
+    if (g_xinputSetState(g_padSlot, &v) == ERROR_SUCCESS) {
+        g_lastLeft = left;
+        g_lastRight = right;
+    }
+}
+
+bool RedirectCall(DWORD site, void* target)
+{
+    unsigned char* p = (unsigned char*)site;
+    if (p[0] != 0xE8 || site + 5 + *(int*)(p + 1) != kEmptyFunction) {
+        Log("gamepad: unexpected call at %08lx, vibration not installed", site);
+        return false;
+    }
+    DWORD prot;
+    VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &prot);
+    *(DWORD*)(p + 1) = (DWORD)target - (site + 5);
+    VirtualProtect(p, 5, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), p, 5);
+    return true;
+}
+
 // Inline detour: relocate `len` whole prologue bytes into a trampoline.
 void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
 {
@@ -180,6 +246,7 @@ void Gamepad_Install()
     for (const char* name : dlls) {
         if (HMODULE h = LoadLibraryA(name)) {
             g_xinputGetState = (XInputGetState_t)GetProcAddress(h, "XInputGetState");
+            g_xinputSetState = (XInputSetState_t)GetProcAddress(h, "XInputSetState");
             if (g_xinputGetState) break;
         }
     }
@@ -191,4 +258,33 @@ void Gamepad_Install()
                                             (void*)GetStickHook);
     if (!g_original || !g_originalGetStick) return;
     Log("gamepad: installed (Xbox controller mapping on all game actions)");
+
+    bool vibration = g_xinputSetState != nullptr;
+    for (DWORD site : kSmallMotorCalls)
+        vibration = vibration && ((unsigned char*)site)[0] == 0xE8;
+    if (vibration && RedirectCall(kSmallMotorCalls[0], (void*)SmallMotor) &&
+        RedirectCall(kSmallMotorCalls[1], (void*)SmallMotor) && RedirectCall(kLargeMotorCall, (void*)LargeMotor))
+        Log("gamepad: vibration installed");
+}
+
+void Gamepad_OnFrame(HWND gameWindow)
+{
+    if (!g_xinputSetState) return;
+    if (g_smallFrames > 0) g_smallFrames--;
+    if (g_largeFrames > 0) g_largeFrames--;
+    bool wanted = g_smallFrames > 0 || g_largeFrames > 0;
+    bool active = *g_vibrationEnabled && g_padConnected && GetForegroundWindow() == gameWindow;
+    static bool loggedBlocked;
+    if (wanted && !active && !loggedBlocked) {
+        loggedBlocked = true;
+        Log("vibration: blocked (option %d, pad %d, foreground %p, game window %p)", *g_vibrationEnabled,
+            g_padConnected, GetForegroundWindow(), gameWindow);
+    }
+    SetMotors(active && g_largeFrames > 0 ? g_largeSpeed : 0, active && g_smallFrames > 0 ? 0xFFFF : 0);
+}
+
+void Gamepad_Shutdown()
+{
+    g_smallFrames = g_largeFrames = 0;
+    SetMotors(0, 0);
 }
