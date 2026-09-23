@@ -9,10 +9,15 @@
 // (Xbox 0xdc160):
 //
 //   action 0 A, 1 B, 2 X, 3 Y, 4 Black (RB), 5 White (LB), 6 LT, 7 RT,
-//   8 Back, 9 Start, 10 right stick click, 11 left stick click,
-//   12 D-pad up, 13 right, 14 down, 15 left,
-//   0x25/0x26 move left/right, 0x27/0x28 move forward/back  (left stick)
-//   0x29/0x2a, 0x2b/0x2c camera                             (right stick)
+//   9 Start, 10 right stick click, 11 left stick click,
+//   12 D-pad up, 13 right, 14 down, 15 left.
+// Action 8 (Back/View) is left unmapped: the PC port bound it to "quit game".
+//
+// The sticks go through the engine's stick query (0x41fd20, cdecl
+// void(int pad, float* out, int stick)) instead of the per-action values: the
+// PC version builds a stick from four digital actions, clamps each axis on its
+// own and scales it for keyboard use, which makes an analog stick stutter on
+// diagonals. We fill the vector straight from the pad with a round dead zone.
 //
 // This works everywhere (console menus, gameplay, skipping videos) and does not
 // depend on the PC control settings or on GOG's DirectInput wrapper.
@@ -21,6 +26,7 @@
 #include <windows.h>
 #include <xinput.h>
 #include <string.h>
+#include <math.h>
 #include "gamepad.h"
 
 void Log(const char* fmt, ...);
@@ -62,18 +68,22 @@ void RefreshPad()
 float Button(WORD mask) { return (g_pad.wButtons & mask) ? 1.0f : 0.0f; }
 float Trigger(BYTE value) { return value > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ? 1.0f : 0.0f; }
 
-// One direction of a stick axis, 0..1 with a radial-ish dead zone.
-float StickDir(SHORT value, int sign, SHORT deadZone)
+// Stick with a round dead zone, rescaled so that the output starts at 0 at the
+// dead zone edge and reaches 1 at full deflection. Returns false inside it.
+bool Stick(SHORT rawX, SHORT rawY, SHORT deadZone, float& x, float& y)
 {
-    int v = sign * (int)value;
-    if (v <= deadZone) return 0.0f;
-    float f = (float)(v - deadZone) / (32767.0f - deadZone);
-    return f > 1.0f ? 1.0f : f;
+    float fx = rawX, fy = rawY;
+    float m = sqrtf(fx * fx + fy * fy);
+    if (m <= deadZone) return false;
+    float scaled = (m - deadZone) / (32767.0f - deadZone);
+    if (scaled > 1.0f) scaled = 1.0f;
+    x = fx / m * scaled;
+    y = fy / m * scaled;
+    return true;
 }
 
 float PadValue(unsigned action)
 {
-    const SHORT dzL = XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, dzR = XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE;
     switch (action) {
     case 0: return Button(XINPUT_GAMEPAD_A);
     case 1: return Button(XINPUT_GAMEPAD_B);
@@ -83,7 +93,6 @@ float PadValue(unsigned action)
     case 5: return Button(XINPUT_GAMEPAD_LEFT_SHOULDER);   // White
     case 6: return Trigger(g_pad.bLeftTrigger);
     case 7: return Trigger(g_pad.bRightTrigger);
-    case 8: return Button(XINPUT_GAMEPAD_BACK);
     case 9: return Button(XINPUT_GAMEPAD_START);
     case 10: return Button(XINPUT_GAMEPAD_RIGHT_THUMB);
     case 11: return Button(XINPUT_GAMEPAD_LEFT_THUMB);
@@ -91,14 +100,6 @@ float PadValue(unsigned action)
     case 13: return Button(XINPUT_GAMEPAD_DPAD_RIGHT);
     case 14: return Button(XINPUT_GAMEPAD_DPAD_DOWN);
     case 15: return Button(XINPUT_GAMEPAD_DPAD_LEFT);
-    case 0x25: return StickDir(g_pad.sThumbLX, -1, dzL);
-    case 0x26: return StickDir(g_pad.sThumbLX, +1, dzL);
-    case 0x27: return StickDir(g_pad.sThumbLY, +1, dzL);
-    case 0x28: return StickDir(g_pad.sThumbLY, -1, dzL);
-    case 0x29: return StickDir(g_pad.sThumbRX, +1, dzR);
-    case 0x2a: return StickDir(g_pad.sThumbRX, -1, dzR);
-    case 0x2b: return StickDir(g_pad.sThumbRY, +1, dzR);
-    case 0x2c: return StickDir(g_pad.sThumbRY, -1, dzR);
     }
     return 0.0f;
 }
@@ -113,6 +114,60 @@ float __fastcall GetActionValueHook(void* input, void* /*edx*/, unsigned action)
     return p > v ? p : v;
 }
 
+// ---------------------------------------------------------------- sticks
+const DWORD kGetStick = 0x0041fd20;
+const unsigned char kGetStickPrologue[] = { 0x8B, 0x44, 0x24, 0x04, 0x33, 0xD2 };  // 2 whole instructions
+const DWORD* const g_stickEnableMask = (const DWORD*)0x007f1578;
+
+typedef void(__cdecl* GetStick_t)(int pad, float* out, int stick);
+GetStick_t g_originalGetStick;
+
+void __cdecl GetStickHook(int pad, float* out, int stick)
+{
+    g_originalGetStick(pad, out, stick);
+    if (pad != 0 || !(*g_stickEnableMask & (1u << (stick + 24)))) return;  // stick disabled by the game
+    RefreshPad();
+    if (!g_padConnected) return;
+    float x, y;
+    if (stick == 0) {
+        // Movement: the stick replaces the keyboard direction while it is deflected.
+        if (Stick(g_pad.sThumbLX, g_pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, x, y)) {
+            out[0] = x;
+            out[1] = y;
+        }
+    } else {
+        // Camera: added on top of mouse and keys.
+        if (Stick(g_pad.sThumbRX, g_pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, x, y)) {
+            out[0] += x;
+            out[1] += y;
+        }
+    }
+}
+
+// Inline detour: relocate `len` whole prologue bytes into a trampoline.
+void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
+{
+    unsigned char* fn = (unsigned char*)addr;
+    if (memcmp(fn, prologue, len) != 0) {
+        Log("gamepad: unexpected code at %08lx, not hooked", addr);
+        return nullptr;
+    }
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return nullptr;
+    memcpy(tramp, fn, len);
+    tramp[len] = 0xE9;
+    *(DWORD*)(tramp + len + 1) = (DWORD)(fn + len) - (DWORD)(tramp + len + 5);
+
+    DWORD prot;
+    VirtualProtect(fn, len, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)hook - (DWORD)(fn + 5);
+    for (size_t i = 5; i < len; i++) fn[i] = 0x90;
+    VirtualProtect(fn, len, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, len);
+    return tramp;
+}
+
 }  // namespace
 
 void Gamepad_Install()
@@ -121,11 +176,6 @@ void Gamepad_Install()
     if (done) return;
     done = true;
 
-    unsigned char* fn = (unsigned char*)kGetActionValue;
-    if (memcmp(fn, kGetActionValuePrologue, sizeof(kGetActionValuePrologue)) != 0) {
-        Log("gamepad: unexpected code at %08lx, not installed", kGetActionValue);
-        return;
-    }
     const char* dlls[] = { "xinput1_4.dll", "xinput1_3.dll", "xinput9_1_0.dll" };
     for (const char* name : dlls) {
         if (HMODULE h = LoadLibraryA(name)) {
@@ -135,21 +185,10 @@ void Gamepad_Install()
     }
     if (!g_xinputGetState) { Log("gamepad: no XInput DLL, not installed"); return; }
 
-    // Trampoline: the relocated prologue, then a jump back behind it.
-    const size_t n = sizeof(kGetActionValuePrologue);
-    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!tramp) return;
-    memcpy(tramp, fn, n);
-    tramp[n] = 0xE9;
-    *(DWORD*)(tramp + n + 1) = (DWORD)(fn + n) - (DWORD)(tramp + n + 5);
-    g_original = (GetActionValue_t)tramp;
-
-    DWORD prot;
-    VirtualProtect(fn, n, PAGE_EXECUTE_READWRITE, &prot);
-    fn[0] = 0xE9;
-    *(DWORD*)(fn + 1) = (DWORD)GetActionValueHook - (DWORD)(fn + 5);
-    for (size_t i = 5; i < n; i++) fn[i] = 0x90;
-    VirtualProtect(fn, n, prot, &prot);
-    FlushInstructionCache(GetCurrentProcess(), fn, n);
+    g_original = (GetActionValue_t)Detour(kGetActionValue, kGetActionValuePrologue,
+                                          sizeof(kGetActionValuePrologue), (void*)GetActionValueHook);
+    g_originalGetStick = (GetStick_t)Detour(kGetStick, kGetStickPrologue, sizeof(kGetStickPrologue),
+                                            (void*)GetStickHook);
+    if (!g_original || !g_originalGetStick) return;
     Log("gamepad: installed (Xbox controller mapping on all game actions)");
 }
