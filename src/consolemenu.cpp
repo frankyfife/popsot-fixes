@@ -18,8 +18,7 @@
 //    the functions that are still present in the PC executable.
 //
 // 3. The pad state builder drops all pad input while a PC front-end flag is
-//    set, and the menu D-pad actions are not bound at all on PC. We keep the
-//    input and feed an XInput controller in as Xbox pad bits while a menu is open.
+//    set. We keep the input. (The controller itself is fed in by gamepad.cpp.)
 //
 // 4. The element show/hide function (0x69a840) was reduced to "hide only", so
 //    console menu elements could never appear. We restore the Xbox behaviour.
@@ -27,7 +26,6 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <string.h>
-#include <xinput.h>
 #include "consolemenu.h"
 
 void Log(const char* fmt, ...);
@@ -105,63 +103,6 @@ void __fastcall ElementSetVisible(char* elem, void* /*edx*/, int show)
     }
 }
 
-// ---------------------------------------------------------------- pad bits
-// The engine keeps the Xbox-style digital pad state as a bit mask of logical
-// actions (0x80d074 current, 0x80d070 previous frame; built by 0x41fa10). The
-// console menus poll A/B/Y/Start and the D-pad (bits 12-15); the PC port never
-// binds the D-pad bits to anything. While a console menu is open we OR the
-// XInput pad into that mask.
-DWORD* const g_padBits = (DWORD*)0x0080d074;
-
-enum : DWORD {
-    PAD_A = 1u << 0, PAD_B = 1u << 1, PAD_X = 1u << 2, PAD_Y = 1u << 3,
-    PAD_START = 1u << 9, PAD_BACK = 1u << 10,
-    // D-pad bits as the menus use them (verified in-game: 13 = up, 14 = down).
-    PAD_LEFT = 1u << 12, PAD_UP = 1u << 13, PAD_DOWN = 1u << 14, PAD_RIGHT = 1u << 15,
-};
-
-typedef DWORD(WINAPI* XInputGetState_t)(DWORD, XINPUT_STATE*);
-XInputGetState_t g_xinputGetState;
-
-DWORD ReadXInputAsPadBits()
-{
-    static bool loaded;
-    if (!loaded) {
-        loaded = true;
-        HMODULE h = LoadLibraryA("xinput1_4.dll");
-        if (!h) h = LoadLibraryA("xinput1_3.dll");
-        if (h) g_xinputGetState = (XInputGetState_t)GetProcAddress(h, "XInputGetState");
-    }
-    if (!g_xinputGetState) {
-        static bool loggedMissing;
-        if (!loggedMissing) { loggedMissing = true; Log("console menu: XInput not available"); }
-        return 0;
-    }
-    for (DWORD i = 0; i < XUSER_MAX_COUNT; i++) {
-        XINPUT_STATE st;
-        if (g_xinputGetState(i, &st) != ERROR_SUCCESS) continue;
-        const XINPUT_GAMEPAD& p = st.Gamepad;
-        static int loggedPad = -1;
-        static WORD lastButtons = 0xffff;
-        if (loggedPad != (int)i) { loggedPad = (int)i; Log("console menu: XInput controller found in slot %lu", i); }
-        if (p.wButtons != lastButtons) { lastButtons = p.wButtons; Log("console menu: XInput buttons %04x", p.wButtons); }
-        DWORD bits = 0;
-        if (p.wButtons & XINPUT_GAMEPAD_A) bits |= PAD_A;
-        if (p.wButtons & XINPUT_GAMEPAD_B) bits |= PAD_B;
-        if (p.wButtons & XINPUT_GAMEPAD_X) bits |= PAD_X;
-        if (p.wButtons & XINPUT_GAMEPAD_Y) bits |= PAD_Y;
-        if (p.wButtons & XINPUT_GAMEPAD_START) bits |= PAD_START;
-        if (p.wButtons & XINPUT_GAMEPAD_BACK) bits |= PAD_BACK;
-        const int dz = 16000;
-        if ((p.wButtons & XINPUT_GAMEPAD_DPAD_UP) || p.sThumbLY > dz) bits |= PAD_UP;
-        if ((p.wButtons & XINPUT_GAMEPAD_DPAD_DOWN) || p.sThumbLY < -dz) bits |= PAD_DOWN;
-        if ((p.wButtons & XINPUT_GAMEPAD_DPAD_LEFT) || p.sThumbLX < -dz) bits |= PAD_LEFT;
-        if ((p.wButtons & XINPUT_GAMEPAD_DPAD_RIGHT) || p.sThumbLX > dz) bits |= PAD_RIGHT;
-        return bits;
-    }
-    return 0;
-}
-
 // Xbox menu manager tick, see file comment.
 bool __fastcall XboxMenuTick(char* mgr, void* /*edx*/)
 {
@@ -176,10 +117,8 @@ bool __fastcall XboxMenuTick(char* mgr, void* /*edx*/)
         for (DWORD** c = it; c < end; c++)
             if (*c) Log("console menu: control %p vt %08lx polls pad %lu bit %lu", *c, (*c)[0], (*c)[4], (*c)[5]);
     }
-    if (*(int*)(mgr + kOpenPages) > 0) *g_padBits |= ReadXInputAsPadBits();
-
     static DWORD lastPad;
-    DWORD pad = *g_padBits;
+    DWORD pad = *(DWORD*)0x0080d074;  // engine pad bits (see gamepad.cpp)
     if (pad != lastPad) { lastPad = pad; Log("console menu: pad bits %08lx", pad); }
     for (; it && it < end; it++) {
         DWORD* control = *it;
