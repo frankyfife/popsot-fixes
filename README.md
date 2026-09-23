@@ -18,27 +18,29 @@ Xbox version, but two things made it look flat, milky and blocky:
 
 Water colour and specular strength were already identical to the Xbox and are left alone.
 
-### Controller support in the menus *(work in progress)*
-The PC front-end menus only react to the mouse – a controller does nothing there,
-not even with GOG's input wrapper. The DLL reads an XInput controller and drives
-the menu's own mouse handling:
+### The Xbox menus are back *(experimental)*
+The PC port replaced the console front end with mouse-only menus – a controller does
+nothing there, not even with GOG's input wrapper. The console menus are still inside
+the PC executable, switched off in four places. This DLL switches them back on: you
+get the Xbox menus (3D scene, fading text, controller hints) instead of the PC ones.
 
-| Controller | Action |
-|---|---|
-| D-pad / left stick | Move between menu entries (the entry gets its normal hover highlight) |
-| A | Activate the selected entry |
-| B | Escape / back where the game supports it |
+Known issues: some pages still show PC key hints, the load-game page does not list
+PC save games yet, and vibration is not implemented (the PC port removed it).
 
-In-game controls are not affected.
+### Native Xbox controller support
+Any XInput controller (Xbox One/Series/Elite, …) works everywhere – menus, gameplay,
+skipping videos – with the original Xbox layout. It does not depend on the game's PC
+control settings or on GOG's DirectInput wrapper. Sticks are analog with a round dead
+zone. The Back/View button is left unassigned (the PC port bound it to "quit game").
 
 ## Requirements
 
 * GOG release of *Prince of Persia: The Sands of Time* (runs `gpp.exe`, engine v181)
 * Windows 10/11
-* For menu navigation: an XInput controller (Xbox controllers work natively)
+* An XInput controller (Xbox controllers work natively); keyboard still works
 
-Other releases (retail/Ubisoft) are not supported yet. The menu code checks the game
-functions it uses before calling them and switches itself off on an unknown build.
+Other releases (retail/Ubisoft) are not supported yet. Every patch checks the game
+code it touches before changing it and switches itself off on an unknown build.
 
 ## Installation
 

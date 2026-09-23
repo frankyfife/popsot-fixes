@@ -115,4 +115,62 @@ scroll arrows at `+0x64` / `+0x74` (present if `+0x14` / `+0x20` are set). Row h
 elements, list rows found by probing the list's hit test, scroll arrows), moves the
 UI cursor to the selected target (which triggers the normal hover highlight) and
 clicks via the UI manager's own mouse entry points. Function prologues are verified
-before use.
+before use. *(Superseded by the console menus below; the mouse pages are no longer
+shown when those are enabled.)*
+
+## Console (Xbox) menus
+
+The PC build still contains the complete console front end: Jade AI scripts, compiled
+to C, build pages of fading text, button hints and 3D objects, driven by the engine's
+menu manager (PC `*(0xaf2414)`, Xbox `*(0x7584f0)`, same layout on both). Comparing
+the two executables function by function shows the page class (PC vtables `0x7b1fdc` /
+`0x7b1ff4`, Xbox `0x41f4f8`) and all its logic are unchanged. The port disabled the
+console menus in four places:
+
+| # | PC change | Xbox original | Fix (`consolemenu.cpp`) |
+|---|---|---|---|
+| 1 | "Open menu" (`0x467b70`) activates the console page, then always calls a PC hook (`0x402760`) that pushes a mouse page on top | no hook (`0xe53f0`) | hook becomes `ret` |
+| 2 | Menu manager tick (`0x672310`) only ticks the top page and animations | tick (`0x17d10`) also lets every menu control (input action, manager `+0x14..+0x18`) poll its input and closes pages that finished fading out | Xbox tick rebuilt from functions still present on PC (`0x6979f0`, `0x697cc0`, `0x6d26c0`) |
+| 3 | Pad state builder (`0x41fa10`) clears all pad bits while a PC front-end flag (`*(0x80bc44)+0x1a`) is set | – | branch at `0x41fcdb` made unconditional |
+| 4 | Element show/hide (`0x69a840`) never reads its argument: it returns unless the element is visible, then hides it | `0x38e20` stores and applies the new state | function replaced with the Xbox behaviour, calling the unchanged body logic |
+
+Menu manager: open page count `+0xf0`, page stack `+0x6c + i*4` (1-based), page
+state `+0x84` (observed: 0 inactive, 1 fading in, 2 active; 4 = fade-out finished,
+which the tick turns into 5 via `0x697cc0`; 6 while another page opens on top).
+
+## Controller
+
+The engine is an Xbox engine: every input action is an Xbox pad control, and the
+Xbox build maps its pad in `0xdc160`:
+
+| Action / pad bit | Xbox control | Action / pad bit | Xbox control |
+|---|---|---|---|
+| 0 | A | 8 | Back |
+| 1 | B | 9 | Start |
+| 2 | X | 10 | right thumb |
+| 3 | Y | 11 | left thumb |
+| 4 | Black | 12 | D-pad up |
+| 5 | White | 13 | D-pad right |
+| 6 | L trigger | 14 | D-pad down |
+| 7 | R trigger | 15 | D-pad left |
+
+On PC, `InputManagerPC::GetActionValue` (`0x41d7b0`, thiscall `float(action)`) returns
+the highest value of up to three bindings per action; the digital pad bits
+(`0x80d074`, previous frame `0x80d070`) are built from actions 0–15 every frame. The
+PC key bindings leave the D-pad actions 12–15 unbound, which is why the console menus
+cannot be navigated with arrow keys. Sticks come from `0x41fd20` (cdecl
+`void(int pad, float* out, int stick)`): movement from actions `0x25`–`0x28`, camera
+from the mouse plus actions `0x29`–`0x2c`, gated by the mask at `0x7f1578`.
+
+**Fix (`gamepad.cpp`):** `GetActionValue` returns the maximum of the original value and
+an XInput pad mapped as above (Black = RB, White = LB; Back is left unmapped because the
+PC port bound action 8 to "quit game"). The stick query is filled straight from the pad
+with a round dead zone.
+
+### Vibration (not restored yet)
+
+The PC build has no force feedback at all. On Xbox, `0xdc700` (pad in EAX, strength
+0–255 in EDX) and `0xdc6a0` (pad in ESI, on/off in ECX) drive the two motors, and
+`0xdbac0` is the "Vibration on/off" option (flag `0x43b140`, active pad `0x43b14c`).
+The calls are inlined into roughly 30 compiled AI script functions (e.g. `0x12e000`),
+so restoring vibration means locating the PC counterpart of each site.
