@@ -24,14 +24,15 @@ nothing there, not even with GOG's input wrapper. The console menus are still in
 the PC executable, switched off in four places. This DLL switches them back on: you
 get the Xbox menus (3D scene, fading text, controller hints) instead of the PC ones.
 
-Known issues: some pages still show PC key hints, the load-game page does not list
-PC save games yet, and vibration is not implemented (the PC port removed it).
+Known issues: some pages still show PC key hints and the load-game page does not list
+PC save games yet.
 
 ### Native Xbox controller support
 Any XInput controller (Xbox One/Series/Elite, …) works everywhere – menus, gameplay,
 skipping videos – with the original Xbox layout. It does not depend on the game's PC
 control settings or on GOG's DirectInput wrapper. Sticks are analog with a round dead
 zone. The Back/View button is left unassigned (the PC port bound it to "quit game").
+Vibration, which the PC port removed, is back and follows the in-game Vibration option.
 
 ## Requirements
 

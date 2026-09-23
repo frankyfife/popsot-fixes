@@ -167,10 +167,25 @@ an XInput pad mapped as above (Black = RB, White = LB; Back is left unmapped bec
 PC port bound action 8 to "quit game"). The stick query is filled straight from the pad
 with a round dead zone.
 
-### Vibration (not restored yet)
+### Vibration
 
-The PC build has no force feedback at all. On Xbox, `0xdc700` (pad in EAX, strength
-0â€“255 in EDX) and `0xdc6a0` (pad in ESI, on/off in ECX) drive the two motors, and
-`0xdbac0` is the "Vibration on/off" option (flag `0x43b140`, active pad `0x43b14c`).
-The calls are inlined into roughly 30 compiled AI script functions (e.g. `0x12e000`),
-so restoring vibration means locating the PC counterpart of each site.
+The PC build has no force feedback. On Xbox, `0xdc700` (pad in EAX, strength 0–255 in
+EDX, large motor) and `0xdc6a0` (pad in ESI, on/off in ECX, small motor) drive the
+motors for a number of frames, and `0xdbac0` is the "Vibration on/off" option.
+
+The AI script functions that start the motors are still present on PC and are found
+through the AI function table, whose ids match between the builds:
+
+| Id | Xbox | PC | Arguments |
+|---|---|---|---|
+| `0x1b63` | `0x2dff20` | `0x498800` | pad, frames (small motor) |
+| `0x1b64` | `0x2dff70` | `0x498890` | pad, strength, frames (large motor) |
+| `0x1b68` | `0x2e0070` | `0x4989c0` | enabled (option; PC stores it at `0x7f157c`) |
+
+On PC the first two pop their arguments and then call `0x563530`, a bare `ret` that
+the compiler shares between ~1000 stripped call sites. **Fix (`gamepad.cpp`):** the
+three call sites (`0x498867`, `0x49887f`, `0x49892e`) are redirected to functions that
+run the XInput motors for the given number of frames (strength `s/255 × 65535`, like
+Xbox), honouring the option and only while the game window is in the foreground.
+Stopping calls that the Xbox build inlines elsewhere (cutscenes, pause) are not needed
+because every rumble has a duration.
