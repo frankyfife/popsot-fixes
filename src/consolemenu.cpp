@@ -2,7 +2,7 @@
 //
 // The PC build still contains the console menus: they are Jade AI scripts
 // (compiled to C) that build fading text pages, driven by the engine's menu
-// manager. The PC port disabled them in two places:
+// manager. The PC port disabled them in four places:
 //
 // 1. The engine's "open menu" routine (0x467b70) activates the console menu
 //    and then unconditionally calls a PC hook (0x402760) that pushes one of the
@@ -16,6 +16,13 @@
 //    The PC version (0x672310) only kept the last two steps, so the console
 //    menus never see any input. We replace it with the Xbox logic, built from
 //    the functions that are still present in the PC executable.
+//
+// 3. The pad state builder drops all pad input while a PC front-end flag is
+//    set, and the menu D-pad actions are not bound at all on PC. We keep the
+//    input and feed an XInput controller in as Xbox pad bits while a menu is open.
+//
+// 4. The element show/hide function (0x69a840) was reduced to "hide only", so
+//    console menu elements could never appear. We restore the Xbox behaviour.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
