@@ -29,7 +29,9 @@ PC save games yet.
 
 ### Native Xbox controller support
 Any XInput controller (Xbox One/Series/Elite, …) works everywhere – menus, gameplay,
-skipping videos – with the original Xbox layout. It does not depend on the game's PC
+skipping videos. Face buttons are laid out like the Xbox version; shoulder buttons and
+triggers follow the PS2 version (LB rewind, RB special action, LT alternate view, RT look),
+because the original Xbox pad had no shoulder buttons. It does not depend on the game's PC
 control settings or on GOG's DirectInput wrapper. Sticks are analog with a round dead
 zone. The Back/View button is left unassigned (the PC port bound it to "quit game").
 Vibration, which the PC port removed, is back and follows the in-game Vibration option.

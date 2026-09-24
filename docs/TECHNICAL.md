@@ -163,13 +163,16 @@ cannot be navigated with arrow keys. Sticks come from `0x41fd20` (cdecl
 from the mouse plus actions `0x29`â€“`0x2c`, gated by the mask at `0x7f1578`.
 
 **Fix (`gamepad.cpp`):** `GetActionValue` returns the maximum of the original value and
-an XInput pad mapped as above (Black = RB, White = LB; Back is left unmapped because the
+an XInput pad mapped as above for the face buttons, D-pad, Start and stick clicks. Shoulders
+and triggers follow the PS2 layout of the game, since the original Xbox pad had no shoulder
+buttons: LB = L trigger (rewind), RB = R trigger (special action), LT = White (alternate
+view), RT = Black (look). Back is left unmapped because the
 PC port bound action 8 to "quit game"). The stick query is filled straight from the pad
 with a round dead zone.
 
 ### Vibration
 
-The PC build has no force feedback. On Xbox, `0xdc700` (pad in EAX, strength 0–255 in
+The PC build has no force feedback. On Xbox, `0xdc700` (pad in EAX, strength 0â€“255 in
 EDX, large motor) and `0xdc6a0` (pad in ESI, on/off in ECX, small motor) drive the
 motors for a number of frames, and `0xdbac0` is the "Vibration on/off" option.
 
@@ -185,7 +188,7 @@ through the AI function table, whose ids match between the builds:
 On PC the first two pop their arguments and then call `0x563530`, a bare `ret` that
 the compiler shares between ~1000 stripped call sites. **Fix (`gamepad.cpp`):** the
 three call sites (`0x498867`, `0x49887f`, `0x49892e`) are redirected to functions that
-run the XInput motors for the given number of frames (strength `s/255 × 65535`, like
+run the XInput motors for the given number of frames (strength `s/255 Ã— 65535`, like
 Xbox), honouring the option and only while the game window is in the foreground.
 Stopping calls that the Xbox build inlines elsewhere (cutscenes, pause) are not needed
 because every rumble has a duration.
