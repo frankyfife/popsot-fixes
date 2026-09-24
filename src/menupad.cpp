@@ -42,10 +42,11 @@ const MgrKey_t MgrKeyUp = (MgrKey_t)0x007124e0;
 //     between elements with the arrow keys;
 //   - after every key event the page gives the focus to the element under the
 //     mouse cursor (0x716c50), so a resting cursor steals it.
-// So the pad parks the mouse cursor outside the screen while it is used, lets
-// the focused widget handle a direction first (list rows, slider values) and,
-// if nothing changed, moves the focus itself to the nearest element in that
-// direction, through the elements' own focus/unfocus methods.
+// So the pad lets the focused widget handle a direction first (list rows,
+// slider values) and, if nothing changed, moves the focus itself to the nearest
+// element in that direction through the elements' own focus/unfocus methods.
+// The hover highlight (gold -> white text) follows the mouse cursor, not the
+// focus, so the cursor is then put on the focused element / list row.
 const DWORD kListVtable = 0x007b7ce0;    // MNU_List widget
 const DWORD kSliderVtable = 0x007b7d90;  // MNU_Slider widget
 typedef int(__thiscall* WidgetType_t)(void* widget);
@@ -53,6 +54,7 @@ typedef void(__thiscall* WidgetRect_t)(void* widget, short* rect);  // x0, x1, y
 typedef void(__thiscall* ElemFn_t)(void* elem);
 typedef void(__thiscall* MgrMouseMove_t)(void* mgr, const DWORD* packedPos);
 const MgrMouseMove_t MgrMouseMove = (MgrMouseMove_t)0x007125f0;
+DWORD g_cursorSet = 0xFFFFFFFF;  // last cursor position we set (mouse untouched while equal)
 
 // Visible, enabled and of a focusable widget type (types as in 0x711e40).
 bool Focusable(char* elem)
@@ -113,6 +115,28 @@ int ListRow(char* elem)
 {
     char* w = elem ? *(char**)(elem + 0x2c) : nullptr;
     return w && *(DWORD*)w == kListVtable ? *(int*)(w + 0x30) : -1;
+}
+
+// Put the (virtual) mouse cursor on the focused element - or on the current row
+// of a list - so the game shows its normal hover highlight there.
+void PointAt(void* mgr, char* elem)
+{
+    if (!elem) return;
+    int x, y;
+    if (!Center(elem, x, y)) return;
+    char* w = *(char**)(elem + 0x2c);
+    if (*(DWORD*)w == kListVtable) {
+        const short* rows = (const short*)(w + 0x6c);  // rows rect x0, x1, y0, y1
+        int visible = *(int*)(w + 0x7c), first = *(int*)(w + 0x80), cur = *(int*)(w + 0x30);
+        if (visible > 0 && cur >= first && cur < first + visible) {
+            int h = (rows[3] - rows[2] + 1) / visible;
+            x = (rows[0] + rows[1]) / 2;
+            y = rows[2] + (cur - first) * h + h / 2;
+        }
+    }
+    DWORD pos = (DWORD)(WORD)(short)x | ((DWORD)(WORD)(short)y << 16);
+    MgrMouseMove(mgr, &pos);
+    g_cursorSet = pos;
 }
 
 bool IsSlider(char* elem)
@@ -273,6 +297,10 @@ void Update()
     DWORD pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     if (pid != GetCurrentProcessId()) return;  // game not in the foreground
+    // New page while the pad is in use (the cursor is still where we put it):
+    // highlight its focused element right away.
+    if (page != g_lastPage && *(DWORD*)((char*)mgr + 0x1a) == g_cursorSet)
+        PointAt(mgr, *(char**)(page + 0x40));
     LogFocus(page, "page");
     if (!havePad) return;
 
@@ -285,14 +313,9 @@ void Update()
     g_heldKey = key;
 
     bool any = step || (pressed & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y));
-    if (any) {
-        // Park the mouse cursor off screen so it does not take the focus back.
-        const DWORD parked = 0xFC18FC18;  // (-1000, -1000)
-        if (*(DWORD*)((char*)mgr + 0x1a) != parked) MgrMouseMove(mgr, &parked);
-        if (!*(char**)(page + 0x40)) {
-            char* first = Neighbour(page, VK_DOWN);
-            if (first) SetFocus(page, first);
-        }
+    if (any && !*(char**)(page + 0x40)) {
+        char* first = Neighbour(page, VK_DOWN);
+        if (first) SetFocus(page, first);
     }
 
     if (step) {
@@ -304,7 +327,10 @@ void Update()
         if (page && *(char**)(page + 0x40) == focus && ListRow(focus) == row && !sliderValue) {
             if (char* next = Neighbour(page, key)) SetFocus(page, next);
         }
-        if (page) LogFocus(page, "move");
+        if (page) {
+            PointAt(mgr, *(char**)(page + 0x40));
+            LogFocus(page, "move");
+        }
     }
     if (pressed & XINPUT_GAMEPAD_A) { Press(mgr, VK_RETURN); if ((page = TopPage(mgr))) LogFocus(page, "A"); }
     if (pressed & (XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y)) { Press(mgr, VK_ESCAPE); if ((page = TopPage(mgr))) LogFocus(page, "back"); }
