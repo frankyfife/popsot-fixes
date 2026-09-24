@@ -22,6 +22,7 @@
 #include <d3d9.h>
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include "menupad.h"
 #include "trace.h"
 #include "consolemenu.h"
@@ -516,10 +517,13 @@ static HRESULT STDMETHODCALLTYPE hk_CreatePixelShader(IDirect3DDevice9* dev, con
 //   c12 = REFRACT (ratio, ratio^2, x/y offset scale), c13 = (HALF, 0, ZOFFSET, ZMAX).
 // The refraction offset is scaled by min(eye z, ZMAX) + ZOFFSET. The PC port
 // uses ZOFFSET 1 / ZMAX 3, the Xbox (xemu capture, c[-65]) uses 3 / 10, which
-// makes the PC refraction roughly 3x weaker. Restore the Xbox values.
+// makes the PC refraction roughly 3x weaker. Restore the Xbox values, times an
+// optional strength factor ([water] refraction in popfix.ini, default 1.5).
 static const float kPcRefract[4] = { 0.6f, 0.36f, 0.04375f, 0.009375f };
 static const float kXboxZOffset = 3.0f, kXboxZMax = 10.0f;
+static float g_refractScale = 1.5f;
 static bool g_loggedRefract;
+static char g_iniPath[MAX_PATH];
 
 static HRESULT STDMETHODCALLTYPE hk_SetVertexShaderConstantF(IDirect3DDevice9* dev, UINT start, const float* data,
                                                              UINT count)
@@ -533,11 +537,12 @@ static HRESULT STDMETHODCALLTYPE hk_SetVertexShaderConstantF(IDirect3DDevice9* d
                 float* c13 = buf + (13 - start) * 4;
                 if (!g_loggedRefract) {
                     g_loggedRefract = true;
-                    Log("water refraction depth scale: ZOFFSET %.2f -> %.2f, ZMAX %.2f -> %.2f",
-                        c13[2], kXboxZOffset, c13[3], kXboxZMax);
+                    Log("water refraction depth scale: ZOFFSET %.2f -> %.2f, ZMAX %.2f -> %.2f (Xbox x %.2f)",
+                        c13[2], kXboxZOffset * g_refractScale, c13[3], kXboxZMax * g_refractScale,
+                        g_refractScale);
                 }
-                c13[2] = kXboxZOffset;
-                c13[3] = kXboxZMax;
+                c13[2] = kXboxZOffset * g_refractScale;
+                c13[3] = kXboxZMax * g_refractScale;
                 return o_SetVertexShaderConstantF(dev, start, buf, count);
             }
         }
@@ -743,6 +748,14 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetCurrentProcessId(), t.wHour, t.wMinute, t.wSecond);
         AddVectoredExceptionHandler(0, CrashLogger);
 
+        if (slash) {
+            strcpy(slash + 1, "popfix.ini");
+            strcpy(g_iniPath, path);
+            char v[32];
+            GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
+            float f = (float)atof(v);
+            if (f > 0.0f && f <= 10.0f) g_refractScale = f;
+        }
         if (slash) strcpy(slash + 1, "dx_gog.dll");
         g_gog = LoadLibraryA(path);
         if (!g_gog) { Log("failed to load %s (error %lu)", path, GetLastError()); return FALSE; }

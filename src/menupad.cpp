@@ -147,13 +147,34 @@ bool ListRowPoint(char* w, int row, int& x, int& y)
     return true;
 }
 
+typedef char*(__thiscall* ElementAt_t)(void* page, const short* pos);
+const ElementAt_t ElementAt = (ElementAt_t)0x00716d90;  // what the mouse would hover
+
+// A point inside the element's rect where the page's own hover test finds this
+// element (rects overlap, e.g. text boxes wider than their text).
+bool HoverPoint(char* page, char* elem, int& x, int& y)
+{
+    char* w = *(char**)(elem + 0x2c);
+    short r[4] = { 0, 0, 0, 0 };
+    ((WidgetRect_t)(*(DWORD**)w)[4])(w, r);
+    if (r[1] <= r[0] || r[3] <= r[2]) return false;
+    static const int fx[] = { 50, 30, 70, 15, 85, 5, 95 }, fy[] = { 50, 30, 70, 15, 85 };
+    for (int j : fy)
+        for (int i : fx) {
+            short pos[2] = { (short)(r[0] + (r[1] - r[0]) * i / 100), (short)(r[2] + (r[3] - r[2]) * j / 100) };
+            if (ElementAt(page, pos) == elem) { x = pos[0]; y = pos[1]; return true; }
+        }
+    return false;
+}
+
 // Put the (virtual) mouse cursor on the focused element - or on the current row
 // of a list - so the game shows its normal hover highlight there.
-void PointAt(void* mgr, char* elem)
+void PointAt(void* mgr, char* page, char* elem)
 {
     if (!elem) return;
     int x, y;
     if (!Center(elem, x, y)) return;
+    HoverPoint(page, elem, x, y);
     char* w = *(char**)(elem + 0x2c);
     if (*(DWORD*)w == kListVtable) {
         int row = *(int*)(w + 0x30);
@@ -188,6 +209,7 @@ const Signature kSignatures[] = {
     { 0x007125f0, { 0x83, 0xEC, 0x08, 0x8B, 0x44, 0x24, 0x0C, 0x8B } },
     { 0x00712560, { 0x8B, 0x54, 0x24, 0x04, 0x8B, 0x42, 0x04, 0x89 } },
     { 0x00714e70, { 0x83, 0xEC, 0x0C, 0x53, 0x55, 0x56, 0x8B, 0xF1 } },
+    { 0x00716d90, { 0x83, 0xEC, 0x0C, 0x53, 0x55, 0x56, 0x57, 0x8B } },
 };
 
 // ---------------------------------------------------------------- XInput
@@ -333,7 +355,7 @@ void Update()
     // New page while the pad is in use (the cursor is still where we put it):
     // highlight its focused element right away.
     if (page != g_lastPage && *(DWORD*)((char*)mgr + 0x1a) == g_cursorSet)
-        PointAt(mgr, *(char**)(page + 0x40));
+        PointAt(mgr, page, *(char**)(page + 0x40));
     LogFocus(page, "page");
     if (!havePad) return;
 
@@ -361,7 +383,7 @@ void Update()
             if (char* next = Neighbour(page, key)) SetFocus(page, next);
         }
         if (page) {
-            PointAt(mgr, *(char**)(page + 0x40));
+            PointAt(mgr, page, *(char**)(page + 0x40));
             LogFocus(page, "move");
         }
     }
@@ -370,7 +392,7 @@ void Update()
         // it (profile list, save lists), exactly as with the mouse.
         char* focus = *(char**)(page + 0x40);
         if (ListRow(focus) >= 0) {
-            PointAt(mgr, focus);
+            PointAt(mgr, page, focus);
             DWORD ev[2] = { 1, g_cursorSet };
             Log("menu pad: double click on %s row %d at %d,%d", ElementName(focus), ListRow(focus),
                 (short)(g_cursorSet & 0xffff), (short)(g_cursorSet >> 16));
