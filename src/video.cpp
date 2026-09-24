@@ -16,6 +16,12 @@
 // time, decoded with Media Foundation. The replacement may have any size up to
 // 4096x4096 and any frame rate (e.g. an AI upscale with frame interpolation);
 // it only has to have the same length.
+//
+// Aspect ratio: 0x674d30 builds the video quad (pre-transformed vertices) over
+// the whole back buffer, stretching the 4:3 videos on wide screens. With
+// [video] keep_aspect=1 the quad is rebuilt at the largest size with the
+// picture's own aspect ratio (4:3 intros pillarboxed, the 1.85:1 cutscenes
+// letterboxed).
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -35,6 +41,12 @@ namespace {
 
 const DWORD kUvScaleU = 0x00af44c0;  // float, video width / texture width
 const DWORD kUvScaleV = 0x00af44bc;  // float, video height / texture height
+const DWORD kVideoQuad = 0x00af44d0;   // vertex buffer object, vertices at +8
+const DWORD kCurrentBink = 0x00af44c8;
+const DWORD kBackBufferW = 0x00ae1614, kBackBufferH = 0x00ae1618;
+const DWORD kBuildQuad = 0x00674d30;
+const DWORD kBuildQuadCalls[] = { 0x00674eeb, 0x00675485 };
+bool g_keepAspect = true;
 
 typedef void*(WINAPI* BinkOpen_t)(const char* name, DWORD flags);
 typedef int(WINAPI* BinkCopyToBuffer_t)(void* bink, void* dest, int pitch, DWORD height, DWORD x, DWORD y,
@@ -244,10 +256,37 @@ void WINAPI BinkCloseHook(void* bink)
     g_binkClose(bink);
 }
 
+// Rebuilds the quad positions with the picture's aspect ratio. Vertices: 4 x 7
+// floats (x, y, z, rhw, colour, u, v), order top-left, top-right,
+// bottom-right, bottom-left.
+void __cdecl BuildQuadHook()
+{
+    ((void(__cdecl*)())kBuildQuad)();
+    if (!g_keepAspect) return;
+    __try {
+        BYTE* quad = *(BYTE**)kVideoQuad;
+        DWORD* bink = *(DWORD**)kCurrentBink;
+        float W = (float)*(DWORD*)kBackBufferW, H = (float)*(DWORD*)kBackBufferH;
+        if (!quad || !bink || W <= 0 || H <= 0) return;
+        float* v = *(float**)(quad + 8);
+        // Largest size with square pixels that fits the screen, centred.
+        float bw = (float)bink[0], bh = (float)bink[1];
+        float s = W / bw < H / bh ? W / bw : H / bh;
+        float x0 = (W - bw * s) / 2, y0 = (H - bh * s) / 2;
+        float x1 = x0 + bw * s, y1 = y0 + bh * s;
+        v[0] = x0;  v[1] = y0;
+        v[7] = x1;  v[8] = y0;
+        v[14] = x1; v[15] = y1;
+        v[21] = x0; v[22] = y1;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
 }  // namespace
 
-void Video_Install()
+void Video_Install(bool keepAspect)
 {
+    g_keepAspect = keepAspect;
     static bool done;
     if (done) return;
     done = true;
@@ -257,6 +296,26 @@ void Video_Install()
                           (void**)&g_binkCopyToBuffer) &&
               PatchImport(exe, "binkw32.dll", "_BinkClose@4", (void*)BinkCloseHook, (void**)&g_binkClose);
     Log("video: %s", ok ? "replacement videos enabled (Video\\<name>.mp4)" : "Bink imports not found, disabled");
+}
+
+// Redirects both calls of the quad builder (applied once Direct3D is created,
+// like the other code patches).
+void Video_InstallCode()
+{
+    static bool done;
+    if (done || !g_keepAspect) return;
+    done = true;
+    bool calls = true;
+    for (DWORD site : kBuildQuadCalls)
+        calls = calls && *(BYTE*)site == 0xE8 && site + 5 + *(DWORD*)(site + 1) == kBuildQuad;
+    if (!calls) { Log("video: unknown quad code, aspect ratio not kept"); return; }
+    for (DWORD site : kBuildQuadCalls) {
+        DWORD prot;
+        VirtualProtect((void*)(site + 1), 4, PAGE_EXECUTE_READWRITE, &prot);
+        *(DWORD*)(site + 1) = (DWORD)BuildQuadHook - (site + 5);
+        VirtualProtect((void*)(site + 1), 4, prot, &prot);
+    }
+    Log("video: videos keep their aspect ratio");
 }
 
 void Video_AdjustTexture(UINT& w, UINT& h, DWORD usage, D3DFORMAT fmt)

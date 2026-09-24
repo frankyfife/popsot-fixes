@@ -3,7 +3,8 @@
 #include <d3d9.h>
 
 // High-resolution replacement videos (see video.cpp).
-void Video_Install();
+void Video_Install(bool keepAspect);  // keepAspect: show the 4:3 videos pillarboxed
+void Video_InstallCode();              // code patches, once Direct3D is created
 // Called from CreateTexture: enlarges the video texture for a replacement.
 void Video_AdjustTexture(UINT& w, UINT& h, DWORD usage, D3DFORMAT fmt);
 void Video_TextureCreated(IDirect3DBaseTexture9* tex);

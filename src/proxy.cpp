@@ -956,6 +956,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Video_InstallCode();
     Sound_Install(g_gameDir);
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT))p_Direct3DCreate9)(sdk);
     Log("Direct3DCreate9(%u) -> %p", sdk, d3d);
@@ -971,6 +972,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out)
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Video_InstallCode();
     Sound_Install(g_gameDir);
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, IDirect3D9Ex**))p_Direct3DCreate9Ex)(sdk, out);
     Log("Direct3DCreate9Ex(%u) -> 0x%08lx", sdk, hr);
@@ -985,6 +987,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9On12(UINT sdk, void* args, UI
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Video_InstallCode();
     Sound_Install(g_gameDir);
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT, void*, UINT))p_Direct3DCreate9On12)(sdk, args, n);
     Log("Direct3DCreate9On12(%u) -> %p", sdk, d3d);
@@ -999,6 +1002,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9On12Ex(UINT sdk, void* args, UINT
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Video_InstallCode();
     Sound_Install(g_gameDir);
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, void*, UINT, IDirect3D9Ex**))p_Direct3DCreate9On12Ex)(sdk, args, n, out);
     Log("Direct3DCreate9On12Ex(%u) -> 0x%08lx", sdk, hr);
@@ -1042,7 +1046,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             slash[1] = 0;
             strcpy(g_gameDir, path);
             Sound_Install(g_gameDir);
-            Video_Install();
+            Video_Install(GetPrivateProfileIntA("video", "keep_aspect", 1, g_iniPath) != 0);
             strcpy(slash + 1, "dx_gog.dll");
         }
         g_gog = LoadLibraryA(path);
