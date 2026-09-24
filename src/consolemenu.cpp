@@ -31,6 +31,7 @@
 #include "consolemenu.h"
 
 void Log(const char* fmt, ...);
+extern "C" IMAGE_DOS_HEADER __ImageBase;
 
 namespace {
 
@@ -503,11 +504,26 @@ bool Patch(DWORD addr, const unsigned char* expect, size_t len, const unsigned c
 
 }  // namespace
 
+// The console menus are optional: popfix.ini next to dx.dll, [menus] console=1.
+// Default are the PC menus, which have every option and native save/load pages.
+bool ConsoleMenusWanted()
+{
+    char path[MAX_PATH];
+    GetModuleFileNameA((HMODULE)&__ImageBase, path, MAX_PATH);
+    char* slash = strrchr(path, '\\');
+    if (slash) strcpy(slash + 1, "popfix.ini");
+    return GetPrivateProfileIntA("menus", "console", 0, path) != 0;
+}
+
 void ConsoleMenu_Enable()
 {
     static bool done;
     if (done) return;
     done = true;
+    if (!ConsoleMenusWanted()) {
+        Log("console menu: off (PC menus; set [menus] console=1 in popfix.ini for the Xbox menus)");
+        return;
+    }
 
     // Check all sites first so we never leave the game half-patched.
     if (memcmp((void*)kPcMenuRedirect, kPcMenuRedirectPrologue, sizeof(kPcMenuRedirectPrologue)) != 0 ||
