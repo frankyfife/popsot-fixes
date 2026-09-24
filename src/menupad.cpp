@@ -36,32 +36,89 @@ typedef void(__thiscall* MgrKey_t)(void* mgr, const KeyEvent* ev);
 const MgrKey_t MgrKeyDown = (MgrKey_t)0x007124c0;
 const MgrKey_t MgrKeyUp = (MgrKey_t)0x007124e0;
 
-// The MNU library came from the consoles and handles key and pad events in
-// every widget, but the PC port switched that off per widget in the page data:
-//   button instances (vtables 0x7b7f78, 0x7b7fc0): byte +0x54 = keys enabled
-//   lists            (vtable 0x7b7ce0):            bit 0 of +0x60 = keys enabled
-// Without it they ignore arrows and Enter (sliders and edit boxes have no such
-// switch). We turn it on for the elements of the top page.
-const DWORD kButtonVtables[] = { 0x007b7f78, 0x007b7fc0 };
-const DWORD kListVtable = 0x007b7ce0;
+// The MNU library came from the consoles and handles key and pad events in its
+// widgets, but the PC page data leaves parts of it unusable:
+//   - the neighbour links are empty on most pages, so the focus cannot move
+//     between elements with the arrow keys;
+//   - after every key event the page gives the focus to the element under the
+//     mouse cursor (0x716c50), so a resting cursor steals it.
+// So the pad parks the mouse cursor outside the screen while it is used, lets
+// the focused widget handle a direction first (list rows, slider values) and,
+// if nothing changed, moves the focus itself to the nearest element in that
+// direction, through the elements' own focus/unfocus methods.
+const DWORD kListVtable = 0x007b7ce0;    // MNU_List widget
+const DWORD kSliderVtable = 0x007b7d90;  // MNU_Slider widget
+typedef int(__thiscall* WidgetType_t)(void* widget);
+typedef void(__thiscall* WidgetRect_t)(void* widget, short* rect);  // x0, x1, y0, y1
+typedef void(__thiscall* ElemFn_t)(void* elem);
+typedef void(__thiscall* MgrMouseMove_t)(void* mgr, const DWORD* packedPos);
+const MgrMouseMove_t MgrMouseMove = (MgrMouseMove_t)0x007125f0;
 
-int EnableKeys(char* page)
+// Visible, enabled and of a focusable widget type (types as in 0x711e40).
+bool Focusable(char* elem)
 {
-    int changed = 0;
-    char** it = *(char***)(page + 0x28);
-    char** end = *(char***)(page + 0x2c);
-    for (; it && it < end; it++) {
-        char* elem = *it;
-        char* widget = elem ? *(char**)(elem + 0x2c) : nullptr;
-        if (!widget) continue;
-        DWORD vt = *(DWORD*)widget;
-        if (vt == kListVtable) {
-            if (!(widget[0x60] & 1)) { widget[0x60] |= 1; changed++; }
-        } else if (vt == kButtonVtables[0] || vt == kButtonVtables[1]) {
-            if (!widget[0x54]) { widget[0x54] = 1; changed++; }
+    char* w = elem ? *(char**)(elem + 0x2c) : nullptr;
+    if (!w || !(elem[100] & 2)) return false;
+    int type = ((WidgetType_t)(*(DWORD**)w)[3])(w);
+    return type == 1 || type == 2 || type == 3 || type == 7 || type == 8 || type == 10;
+}
+
+bool Center(char* elem, int& x, int& y)
+{
+    char* w = *(char**)(elem + 0x2c);
+    short r[4] = { 0, 0, 0, 0 };
+    ((WidgetRect_t)(*(DWORD**)w)[4])(w, r);
+    if (r[1] <= r[0] || r[3] <= r[2]) return false;
+    x = (r[0] + r[1]) / 2;
+    y = (r[2] + r[3]) / 2;
+    return true;
+}
+
+void SetFocus(char* page, char* elem)
+{
+    char* old = *(char**)(page + 0x40);
+    if (old == elem) return;
+    if (old) ((ElemFn_t)(*(DWORD**)old)[4])(old);  // lose focus
+    *(char**)(page + 0x40) = elem;
+    ((ElemFn_t)(*(DWORD**)elem)[3])(elem);          // gain focus
+}
+
+// Nearest focusable element from the focused one in a direction (VK arrow).
+char* Neighbour(char* page, DWORD vk)
+{
+    char* from = *(char**)(page + 0x40);
+    int fx = 320, fy = 240;
+    if (from) Center(from, fx, fy);
+    char* best = nullptr;
+    double bestCost = 1e30;
+    for (char** it = *(char***)(page + 0x28); it && it < *(char***)(page + 0x2c); it++) {
+        char* e = *it;
+        int x, y;
+        if (e == from || !Focusable(e) || !Center(e, x, y)) continue;
+        int dx = x - fx, dy = y - fy, along, across;
+        switch (vk) {
+        case VK_UP: along = -dy; across = dx; break;
+        case VK_DOWN: along = dy; across = dx; break;
+        case VK_LEFT: along = -dx; across = dy; break;
+        default: along = dx; across = dy; break;
         }
+        if (along <= 0) continue;
+        double cost = along + 2.0 * (across < 0 ? -across : across);
+        if (cost < bestCost) { bestCost = cost; best = e; }
     }
-    return changed;
+    return best;
+}
+
+int ListRow(char* elem)
+{
+    char* w = elem ? *(char**)(elem + 0x2c) : nullptr;
+    return w && *(DWORD*)w == kListVtable ? *(int*)(w + 0x30) : -1;
+}
+
+bool IsSlider(char* elem)
+{
+    char* w = elem ? *(char**)(elem + 0x2c) : nullptr;
+    return w && *(DWORD*)w == kSliderVtable;
 }
 
 // Prologue bytes checked before anything is called, so an unknown executable
@@ -72,6 +129,8 @@ const Signature kSignatures[] = {
     { 0x007124e0, { 0x8B, 0x41, 0x10, 0x85, 0xC0, 0x7E, 0x0E, 0x8B } },
     { 0x00716e60, { 0x56, 0x8B, 0xF1, 0x8B, 0x46, 0x40, 0x85, 0xC0 } },
     { 0x007b7ce0, { 0xC0, 0x6A, 0x71, 0x00, 0x90, 0x6A, 0x71, 0x00 } },  // list vtable
+    { 0x007b7d90, { 0xA0, 0x89, 0x71, 0x00, 0x30, 0x88, 0x71, 0x00 } },  // slider vtable
+    { 0x007125f0, { 0x83, 0xEC, 0x08, 0x8B, 0x44, 0x24, 0x0C, 0x8B } },
 };
 
 // ---------------------------------------------------------------- XInput
@@ -139,6 +198,8 @@ const char* ElementName(char* elem) { return elem ? elem + 4 : "(none)"; }
 
 void Press(void* mgr, DWORD vk)
 {
+    static int logged;
+    if (logged < 60) { logged++; Log("menu pad: key %02lx", vk); }
     KeyEvent ev = { vk, 0 };
     MgrKeyDown(mgr, &ev);
     // The page may have closed or changed on key down; the key-up goes to
@@ -161,6 +222,27 @@ DWORD DirectionKey(const XINPUT_GAMEPAD& p)
 
 int g_lastItem = -2;
 
+// Diagnostics: every element of a page with its widget type and flags.
+void DumpPage(char* page)
+{
+    char** it = *(char***)(page + 0x28);
+    char** end = *(char***)(page + 0x2c);
+    Log("menu pad: page %p vt %08lx, %d elements, focus %p", page, *(DWORD*)page, it && end > it ? (int)(end - it) : 0,
+        *(char**)(page + 0x40));
+    for (int i = 0; it && it < end && i < 64; it++, i++) {
+        char* e = *it;
+        if (!e) continue;
+        char* w = *(char**)(e + 0x2c);
+        DWORD wvt = w ? *(DWORD*)w : 0;
+        typedef int(__thiscall* Type_t)(void*);
+        int type = w ? ((Type_t)(*(DWORD**)w)[3])(w) : -1;
+        Log("  [%d] %p \"%.24s\" elem vt %08lx flags %02x | widget %p vt %08lx type %d +54 %02x +60 %02x | nb %p %p %p %p",
+            i, e, e + 4, *(DWORD*)e, (unsigned char)e[100], w, wvt, type, w ? (unsigned char)w[0x54] : 0,
+            w ? (unsigned char)w[0x60] : 0, *(void**)(e + 0x54), *(void**)(e + 0x58), *(void**)(e + 0x5c),
+            *(void**)(e + 0x60));
+    }
+}
+
 void LogFocus(char* page, const char* why)
 {
     char* focus = *(char**)(page + 0x40);
@@ -169,7 +251,7 @@ void LogFocus(char* page, const char* why)
     if (page == g_lastPage && focus == g_lastFocus && item == g_lastItem) return;
     g_lastItem = item;
     if (page == g_lastPage && focus == g_lastFocus) { Log("menu pad: %s row %d (%s)", ElementName(focus), item, why); return; }
-    if (page != g_lastPage) Log("menu pad: page %p", page);
+    if (page != g_lastPage) DumpPage(page);
     Log("menu pad: focus %s (%s)", ElementName(focus), why);
     g_lastPage = page;
     g_lastFocus = focus;
@@ -191,7 +273,6 @@ void Update()
     DWORD pid = 0;
     GetWindowThreadProcessId(GetForegroundWindow(), &pid);
     if (pid != GetCurrentProcessId()) return;  // game not in the foreground
-    if (int n = EnableKeys(page)) Log("menu pad: key navigation enabled on %d widgets of page %p", n, page);
     LogFocus(page, "page");
     if (!havePad) return;
 
@@ -203,7 +284,28 @@ void Update()
     else if (key && (int)(now - g_nextRepeat) >= 0) { step = true; g_nextRepeat = now + 120; }
     g_heldKey = key;
 
-    if (step) { Press(mgr, key); if ((page = TopPage(mgr))) LogFocus(page, "move"); }
+    bool any = step || (pressed & (XINPUT_GAMEPAD_A | XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y));
+    if (any) {
+        // Park the mouse cursor off screen so it does not take the focus back.
+        const DWORD parked = 0xFC18FC18;  // (-1000, -1000)
+        if (*(DWORD*)((char*)mgr + 0x1a) != parked) MgrMouseMove(mgr, &parked);
+        if (!*(char**)(page + 0x40)) {
+            char* first = Neighbour(page, VK_DOWN);
+            if (first) SetFocus(page, first);
+        }
+    }
+
+    if (step) {
+        char* focus = *(char**)(page + 0x40);
+        int row = ListRow(focus);
+        Press(mgr, key);
+        page = TopPage(mgr);
+        bool sliderValue = IsSlider(focus) && (key == VK_LEFT || key == VK_RIGHT);
+        if (page && *(char**)(page + 0x40) == focus && ListRow(focus) == row && !sliderValue) {
+            if (char* next = Neighbour(page, key)) SetFocus(page, next);
+        }
+        if (page) LogFocus(page, "move");
+    }
     if (pressed & XINPUT_GAMEPAD_A) { Press(mgr, VK_RETURN); if ((page = TopPage(mgr))) LogFocus(page, "A"); }
     if (pressed & (XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y)) { Press(mgr, VK_ESCAPE); if ((page = TopPage(mgr))) LogFocus(page, "back"); }
 }
