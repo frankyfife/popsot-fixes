@@ -147,6 +147,9 @@ typedef HRESULT(STDMETHODCALLTYPE* Present_t)(IDirect3DDevice9*, const RECT*, co
 typedef HRESULT(STDMETHODCALLTYPE* CreateTexture_t)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**, HANDLE*);
 typedef HRESULT(STDMETHODCALLTYPE* ResetEx_t)(IDirect3DDevice9Ex*, D3DPRESENT_PARAMETERS*, D3DDISPLAYMODEEX*);
 typedef HRESULT(STDMETHODCALLTYPE* SetRenderTarget_t)(IDirect3DDevice9*, DWORD, IDirect3DSurface9*);
+typedef HRESULT(STDMETHODCALLTYPE* SetViewport_t)(IDirect3DDevice9*, const D3DVIEWPORT9*);
+typedef HRESULT(STDMETHODCALLTYPE* SetFVF_t)(IDirect3DDevice9*, DWORD);
+typedef HRESULT(STDMETHODCALLTYPE* SetVertexShader_t)(IDirect3DDevice9*, IDirect3DVertexShader9*);
 typedef HRESULT(STDMETHODCALLTYPE* StretchRect_t)(IDirect3DDevice9*, IDirect3DSurface9*, const RECT*, IDirect3DSurface9*, const RECT*, D3DTEXTUREFILTERTYPE);
 typedef HRESULT(STDMETHODCALLTYPE* SetTexture_t)(IDirect3DDevice9*, DWORD, IDirect3DBaseTexture9*);
 typedef HRESULT(STDMETHODCALLTYPE* SetSamplerState_t)(IDirect3DDevice9*, DWORD, D3DSAMPLERSTATETYPE, DWORD);
@@ -382,6 +385,55 @@ static HRESULT STDMETHODCALLTYPE hk_ResetEx(IDirect3DDevice9Ex* dev, D3DPRESENT_
     return o_ResetEx(dev, pp, fm);
 }
 
+// ---------------------------------------------------------------- frame capture (F11)
+// Logs every render step of one frame, to analyse post effects.
+static int g_capture;  // > 0 while capturing
+static SetViewport_t o_SetViewport;
+static SetFVF_t o_SetFVF;
+static SetVertexShader_t o_SetVertexShader;
+static DWORD g_curFVF;
+
+static void TexDesc(IDirect3DBaseTexture9* t, char* out, size_t n)
+{
+    if (!t) { _snprintf(out, n, "-"); return; }
+    D3DSURFACE_DESC d;
+    if (t->GetType() == D3DRTYPE_TEXTURE && SUCCEEDED(((IDirect3DTexture9*)t)->GetLevelDesc(0, &d)))
+        _snprintf(out, n, "%p %ux%u f%d%s", t, d.Width, d.Height, d.Format, (d.Usage & D3DUSAGE_RENDERTARGET) ? " RT" : "");
+    else
+        _snprintf(out, n, "%p", t);
+}
+
+static void CaptureDraw(const char* what, UINT count, const void* up, UINT stride)
+{
+    char t0[64], t1[64];
+    TexDesc(g_boundTex[0], t0, sizeof(t0));
+    TexDesc(g_boundTex[1], t1, sizeof(t1));
+    Log("cap: %s n %u fvf %lx ps %p | t0 %s | t1 %s", what, count, g_curFVF, g_curPS, t0, t1);
+    if (up && stride >= 16) {
+        const float* v = (const float*)up;
+        Log("cap:   v0 %.1f %.1f %.2f %.2f | %.3f %.3f %.3f %.3f", v[0], v[1], v[2], v[3], v[4], v[5],
+            stride >= 32 ? v[6] : 0.0f, stride >= 32 ? v[7] : 0.0f);
+    }
+}
+
+static HRESULT STDMETHODCALLTYPE hk_SetViewport(IDirect3DDevice9* dev, const D3DVIEWPORT9* vp)
+{
+    if (g_capture && vp) Log("cap: viewport %lu,%lu %lux%lu", vp->X, vp->Y, vp->Width, vp->Height);
+    return o_SetViewport(dev, vp);
+}
+
+static HRESULT STDMETHODCALLTYPE hk_SetFVF(IDirect3DDevice9* dev, DWORD fvf)
+{
+    g_curFVF = fvf;
+    return o_SetFVF(dev, fvf);
+}
+
+static HRESULT STDMETHODCALLTYPE hk_SetVertexShader(IDirect3DDevice9* dev, IDirect3DVertexShader9* vs)
+{
+    if (g_capture) Log("cap: vertex shader %p", vs);
+    return o_SetVertexShader(dev, vs);
+}
+
 static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* sr, const RECT* dr, HWND w,
                                             const RGNDATA* rgn)
 {
@@ -389,6 +441,11 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     if (GetAsyncKeyState(VK_F10) & 1) {
         g_enabled = !g_enabled;
         Log("F10: fix %s", g_enabled ? "ON" : "OFF");
+    }
+    if (g_capture > 0 && --g_capture == 0) Log("cap: ---- end of frame capture");
+    if (GetAsyncKeyState(VK_F11) & 1) {
+        g_capture = 2;  // the frame after this Present
+        Log("cap: ---- F11 frame capture");
     }
     if (++frames == 300) {
         DumpStats(frames);
@@ -413,6 +470,11 @@ static HRESULT STDMETHODCALLTYPE hk_CreateTexture(IDirect3DDevice9* dev, UINT w,
 
 static HRESULT STDMETHODCALLTYPE hk_SetRenderTarget(IDirect3DDevice9* dev, DWORD idx, IDirect3DSurface9* surf)
 {
+    if (g_capture) {
+        D3DSURFACE_DESC d = {};
+        if (surf) surf->GetDesc(&d);
+        Log("cap: render target %lu = %p %ux%u f%d", idx, surf, d.Width, d.Height, d.Format);
+    }
     if (idx == 0) {
         g_curRTWidth = 0;
         D3DSURFACE_DESC d;
@@ -425,6 +487,13 @@ static HRESULT STDMETHODCALLTYPE hk_SetRenderTarget(IDirect3DDevice9* dev, DWORD
 static HRESULT STDMETHODCALLTYPE hk_StretchRect(IDirect3DDevice9* dev, IDirect3DSurface9* src, const RECT* sr,
                                                 IDirect3DSurface9* dst, const RECT* dr, D3DTEXTUREFILTERTYPE f)
 {
+    if (g_capture) {
+        D3DSURFACE_DESC a = {}, b = {};
+        if (src) src->GetDesc(&a);
+        if (dst) dst->GetDesc(&b);
+        Log("cap: StretchRect %p %ux%u %s -> %p %ux%u %s filter %d", src, a.Width, a.Height, sr ? "rect" : "full", dst,
+            b.Width, b.Height, dr ? "rect" : "full", f);
+    }
     HRESULT hr = o_StretchRect(dev, src, sr, dst, dr, f);
     if (!dst) return hr;
     InvalidateShadowsFor(dst);
@@ -469,6 +538,7 @@ static HRESULT STDMETHODCALLTYPE hk_SetSamplerState(IDirect3DDevice9* dev, DWORD
 
 static HRESULT STDMETHODCALLTYPE hk_DrawPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT sv, UINT n)
 {
+    if (g_capture) CaptureDraw("DrawPrimitive", n, nullptr, 0);
     unsigned m = BeginDraw(dev);
     HRESULT hr = o_DrawPrimitive(dev, t, sv, n);
     if (m) EndDraw(dev, m);
@@ -478,6 +548,7 @@ static HRESULT STDMETHODCALLTYPE hk_DrawPrimitive(IDirect3DDevice9* dev, D3DPRIM
 static HRESULT STDMETHODCALLTYPE hk_DrawIndexedPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT bv, UINT mi,
                                                          UINT nv, UINT si, UINT n)
 {
+    if (g_capture) CaptureDraw("DrawIndexedPrimitive", n, nullptr, 0);
     unsigned m = BeginDraw(dev);
     HRESULT hr = o_DrawIndexedPrimitive(dev, t, bv, mi, nv, si, n);
     if (m) EndDraw(dev, m);
@@ -487,6 +558,7 @@ static HRESULT STDMETHODCALLTYPE hk_DrawIndexedPrimitive(IDirect3DDevice9* dev, 
 static HRESULT STDMETHODCALLTYPE hk_DrawPrimitiveUP(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, UINT n,
                                                     const void* data, UINT stride)
 {
+    if (g_capture) CaptureDraw("DrawPrimitiveUP", n, data, stride);
     unsigned m = BeginDraw(dev);
     HRESULT hr = o_DrawPrimitiveUP(dev, t, n, data, stride);
     if (m) EndDraw(dev, m);
@@ -497,6 +569,7 @@ static HRESULT STDMETHODCALLTYPE hk_DrawIndexedPrimitiveUP(IDirect3DDevice9* dev
                                                            UINT n, const void* idx, D3DFORMAT fmt,
                                                            const void* data, UINT stride)
 {
+    if (g_capture) CaptureDraw("DrawIndexedPrimitiveUP", n, data, stride);
     unsigned m = BeginDraw(dev);
     HRESULT hr = o_DrawIndexedPrimitiveUP(dev, t, mi, nv, n, idx, fmt, data, stride);
     if (m) EndDraw(dev, m);
@@ -581,6 +654,9 @@ static void HookDevice(IDirect3DDevice9* dev, bool isEx)
     HOOK(106, CreatePixelShader)
     HOOK(94, SetVertexShaderConstantF)
     HOOK(107, SetPixelShader)
+    HOOK(47, SetViewport)
+    HOOK(89, SetFVF)
+    HOOK(92, SetVertexShader)
     if (isEx) HOOK(132, ResetEx)
 #undef HOOK
     g_devicesHooked++;
