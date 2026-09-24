@@ -385,7 +385,7 @@ static HRESULT STDMETHODCALLTYPE hk_ResetEx(IDirect3DDevice9Ex* dev, D3DPRESENT_
     return o_ResetEx(dev, pp, fm);
 }
 
-// ---------------------------------------------------------------- frame capture (F11)
+// ---------------------------------------------------------------- frame capture (F8; F11 is taken by the GOG overlay)
 // Logs every render step of one frame, to analyse post effects.
 static int g_capture;  // > 0 while capturing
 static SetViewport_t o_SetViewport;
@@ -443,9 +443,9 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         Log("F10: fix %s", g_enabled ? "ON" : "OFF");
     }
     if (g_capture > 0 && --g_capture == 0) Log("cap: ---- end of frame capture");
-    if (GetAsyncKeyState(VK_F11) & 1) {
+    if (GetAsyncKeyState(VK_F8) & 1) {
         g_capture = 2;  // the frame after this Present
-        Log("cap: ---- F11 frame capture");
+        Log("cap: ---- F8 frame capture");
     }
     if (++frames == 300) {
         DumpStats(frames);
