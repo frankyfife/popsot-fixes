@@ -21,11 +21,14 @@
 // current world *(0xaf5650) is not usable for this: loaded worlds are merged
 // into a "SuperWorld", and other worlds (Prince, CameraAndGlobal, ...) are
 // loaded after it. The menu camera (Camera02 of menu3D) is static, so the offset
-// applies while menu3D has been loaded and the camera is at its position.
+// applies while menu3D has been loaded and the camera is at its position. When a
+// new game starts, the camera flies from there to the Prince; the offset fades
+// out over the first kFadeDistance units of that flight instead of snapping back.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <string.h>
+#include <math.h>
 #include "menucam.h"
 
 void Log(const char* fmt, ...);
@@ -39,6 +42,7 @@ const DWORD kParseWorldPushes[] = { 0x006780c9, 0x0068c1c1 };  // push 0x68bc80
 const DWORD kWorldName = 0x1d8;
 const char kMenuWorld[] = "menu3D";
 const float kMenuCamPos[3] = { -83.59f, 1.39f, -2.66f };  // Camera02 in menu3D
+const float kFadeDistance = 8.0f;
 
 typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
 ViewFromCamera_t g_viewFromCamera;  // trampoline
@@ -47,6 +51,7 @@ float g_back = 0.0f;  // [menus] camera_back
 float g_up = 0.0f;    // [menus] camera_up
 bool g_installed;
 bool g_menuLoaded;  // menu3D has been loaded
+BYTE* g_cam;  // camera we moved last
 bool g_haveOut;
 float g_base[3], g_out[3];
 
@@ -69,12 +74,15 @@ BYTE* __cdecl ParseWorldHook(void* data)
     return world;
 }
 
-bool IsMenuCamera(const float* pos)
+// 1 at the menu camera position, fading to 0 kFadeDistance units away.
+float MenuCameraWeight(const float* pos)
 {
-    if (!g_menuLoaded) return false;
+    if (!g_menuLoaded) return 0.0f;
     float d2 = 0.0f;
     for (int i = 0; i < 3; i++) d2 += (pos[i] - kMenuCamPos[i]) * (pos[i] - kMenuCamPos[i]);
-    return d2 < 1.0f;
+    if (d2 >= kFadeDistance * kFadeDistance) return 0.0f;
+    float w = 1.0f - sqrtf(d2) / kFadeDistance;
+    return w * w * (3.0f - 2.0f * w);  // smoothstep
 }
 
 void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
@@ -100,23 +108,21 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
     __try {
         float* pos = (float*)(cam + 0xb8);
         const float* k = (const float*)(cam + 0xa8);
-        bool ours = g_haveOut && memcmp(pos, g_out, sizeof(g_out)) == 0;
-        if (!ours) memcpy(g_base, pos, sizeof(g_base));
-        static DWORD lastLog, calls;
-        calls++;
-        if (GetTickCount() - lastLog > 5000) {
-            lastLog = GetTickCount();
-            Log("menu camera: cam %p pos %.2f %.2f %.2f dir %.2f %.2f %.2f menu %d (%lu calls)", cam, g_base[0],
-                g_base[1], g_base[2], k[0], k[1], k[2], IsMenuCamera(g_base), calls);
-            calls = 0;
-        }
-        if (IsMenuCamera(g_base) && (g_back != 0.0f || g_up != 0.0f)) {
-            for (int i = 0; i < 3; i++) pos[i] = g_base[i] + g_back * k[i];
-            pos[2] += g_up;
+        // Several cameras pass through here every frame; the offset state belongs
+        // to the one we moved last.
+        bool ours = cam == g_cam && g_haveOut && memcmp(pos, g_out, sizeof(g_out)) == 0;
+        float base[3];
+        memcpy(base, ours ? g_base : pos, sizeof(base));
+        float w = MenuCameraWeight(base);
+        if (w > 0.0f && (g_back != 0.0f || g_up != 0.0f)) {
+            for (int i = 0; i < 3; i++) pos[i] = base[i] + w * g_back * k[i];
+            pos[2] += w * g_up;
+            g_cam = cam;
+            memcpy(g_base, base, sizeof(g_base));
             memcpy(g_out, pos, sizeof(g_out));
             g_haveOut = true;
-        } else {
-            if (ours) memcpy(pos, g_base, sizeof(g_base));
+        } else if (ours) {
+            memcpy(pos, g_base, sizeof(g_base));
             g_haveOut = false;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {

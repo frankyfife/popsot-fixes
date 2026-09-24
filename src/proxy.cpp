@@ -762,8 +762,8 @@ static HRESULT STDMETHODCALLTYPE hk_CreatePixelShader(IDirect3DDevice9* dev, con
 static const float kPcRefract[4] = { 0.6f, 0.36f, 0.04375f, 0.009375f };
 static const float kXboxZOffset = 3.0f, kXboxZMax = 10.0f;
 static float g_refractScale = 1.5f;
-static float g_menuCamBack = 6.5f;  // [menus] camera_back / camera_up, see menucam.cpp
-static float g_menuCamUp = 0.0f;
+static float g_menuCamBack = 3.5f;  // [menus] camera_back / camera_up, see menucam.cpp
+static float g_menuCamUp = 6.25f;
 static bool g_loggedRefract;
 static char g_iniPath[MAX_PATH];
 
@@ -1014,9 +1014,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
             UINT k = GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
             g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
-            GetPrivateProfileStringA("menus", "camera_back", "6.5", v, sizeof(v), g_iniPath);
+            GetPrivateProfileStringA("menus", "camera_back", "3.5", v, sizeof(v), g_iniPath);
             g_menuCamBack = (float)atof(v);
-            GetPrivateProfileStringA("menus", "camera_up", "0", v, sizeof(v), g_iniPath);
+            GetPrivateProfileStringA("menus", "camera_up", "6.25", v, sizeof(v), g_iniPath);
             g_menuCamUp = (float)atof(v);
         }
         if (slash) strcpy(slash + 1, "dx_gog.dll");
