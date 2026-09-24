@@ -246,10 +246,21 @@ bool EnsureProfile()
     return *g_currentProfile != nullptr;
 }
 
+// The slot is an index into the list of existing save files, -1 = new file.
+// PCHD_SaveGame/LoadGame do not range-check it (a slot past the end reads a null
+// entry), and the console pages can pass one.
+typedef int(__cdecl* SaveCount_t)();
+const SaveCount_t SaveCount = (SaveCount_t)0x0041c350;
+const EnumSaves_t FreeSaves = (EnumSaves_t)0x0041c5b0;  // the PC functions free the list when done
+
 int __cdecl SaveGameHook(int slot, int kind, void* data, int size)
 {
     if (!EnsureProfile()) return 0;
     EnumSaves();
+    if (slot != -1 && (slot < 0 || slot >= SaveCount())) {
+        Log("console menu: save slot %d does not exist (%d saves), writing a new save", slot, SaveCount());
+        slot = -1;
+    }
     int ok = PcSaveGame(slot, kind, data, size);
     Log("console menu: save game slot %d -> %d", slot, ok);
     return ok;
@@ -259,6 +270,11 @@ int __cdecl LoadGameHook(int slot, void* data, int size)
 {
     if (!EnsureProfile()) return 0;
     EnumSaves();
+    if (slot < 0 || slot >= SaveCount()) {
+        Log("console menu: load slot %d does not exist (%d saves)", slot, SaveCount());
+        FreeSaves();
+        return 0;
+    }
     int ok = PcLoadGame(slot, data, size);
     Log("console menu: load game slot %d -> %d", slot, ok);
     return ok;

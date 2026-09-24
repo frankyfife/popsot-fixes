@@ -128,6 +128,10 @@ void Trace_ProbeMenuManager()
         for (int i = 1; i <= open && i < 32; i++) {
             DWORD page = *(DWORD*)(mgr + 0x6c + i * 4);
             sig = sig * 131 + page + (page ? *(DWORD*)(page + 0x84) : 0);
+            if (page && *(DWORD*)(page + 0xac)) {
+                DWORD list = *(DWORD*)(page + 0xac);
+                sig = sig * 131 + *(DWORD*)(list + 8) + *(DWORD*)(page + 0xb4);
+            }
         }
         if (sig == lastSig) return;
         lastSig = sig;
@@ -142,6 +146,20 @@ void Trace_ProbeMenuManager()
         for (int i = 1; i <= open && i < 32; i++) {
             DWORD page = *(DWORD*)(mgr + 0x6c + i * 4);
             Log("  open page %d: %08lx state %d", i, page, page ? *(int*)(page + 0x84) : -1);
+            // Console text list of the page (Xbox fills it with save game names):
+            // list object at +0xac {?, head node, size}, node {next, prev, char*},
+            // current node at +0xb4.
+            DWORD list = page ? *(DWORD*)(page + 0xac) : 0;
+            if (!list) continue;
+            DWORD head = *(DWORD*)(list + 4);
+            int size = *(int*)(list + 8);
+            Log("    text list %08lx: %d items, current node %08lx, +b0 %08lx +b8 %08lx", list, size,
+                *(DWORD*)(page + 0xb4), *(DWORD*)(page + 0xb0), *(DWORD*)(page + 0xb8));
+            int k = 0;
+            for (DWORD node = head ? *(DWORD*)head : 0; node && node != head && k < 12; node = *(DWORD*)node, k++) {
+                const char* text = *(const char**)(node + 8);
+                Log("      [%d] node %08lx \"%.60s\"", k, node, text ? text : "(null)");
+            }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("probe: exception while reading the menu manager");
