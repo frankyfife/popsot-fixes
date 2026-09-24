@@ -201,6 +201,7 @@ static UINT g_curRTWidth;
 static UINT g_bbHeight;  // backbuffer height of the game device
 static UINT g_bigRT;     // size of the enlarged blur targets (0 = off), see "post-effect resolution"
 static int g_numBig;
+static UINT g_bigRTMaxFactor = 4;  // [post] blur_resolution in popfix.ini (1 = off)
 
 struct Shadow {
     IDirect3DBaseTexture9* smallTex;   // identity key, not ref-counted
@@ -548,6 +549,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreateTexture(IDirect3DDevice9* dev, UINT w,
     if ((usage & D3DUSAGE_RENDERTARGET) && w == 512 && h == 512 && fmt == D3DFMT_A8R8G8B8 && g_numBig < kMaxBig) {
         UINT k = g_bbHeight / 512;
         if (k > 4) k = 4;
+        if (k > g_bigRTMaxFactor) k = g_bigRTMaxFactor;
         if (k > 1 && g_bigRT == 0) { g_bigRT = 512 * k; InstallQuadHook(); }
         if (g_bigRT) { w = h = g_bigRT; big = true; }
     }
@@ -933,6 +935,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
             float f = (float)atof(v);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;
+            UINT k = GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
+            g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
         }
         if (slash) strcpy(slash + 1, "dx_gog.dll");
         g_gog = LoadLibraryA(path);
