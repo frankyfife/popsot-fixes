@@ -194,10 +194,48 @@ const char* PadPrompt(char code)
 
 int g_promptMode;  // [controller] prompts: 0 auto (controller connected), 1 always, 2 never
 
-const char* __cdecl PromptTextHook(char code)
+bool PadPrompts()
 {
     RefreshPad();
-    if (g_promptMode == 1 || (g_promptMode == 0 && g_padConnected)) {
+    return g_promptMode == 1 || (g_promptMode == 0 && g_padConnected);
+}
+
+// "\dN\" codes insert one of 8 strings the scripts set (table 0x9ec528, 32
+// bytes each; 0x426f20 returns one, 0x426f00 its length). Most are verbs
+// ("Hold", "Press"); 0 is the start key and 3 the camera control.
+const DWORD kDString = 0x00426f20, kDStringLength = 0x00426f00;
+char* const g_dStrings = (char*)0x009ec528;
+const unsigned char kDStringCode[] = { 0x8B, 0x44, 0x24, 0x04, 0x3C, 0x08, 0x72, 0x03 };
+
+const char* __cdecl DStringHook(unsigned char index)
+{
+    if (index >= 8) return nullptr;
+    if (PadPrompts()) {
+        if (index == 0) return "START";
+        if (index == 3) return "RS";
+    }
+    return g_dStrings + index * 32;
+}
+
+int __cdecl DStringLengthHook(unsigned char index)
+{
+    const char* s = DStringHook(index);
+    return s ? (int)strlen(s) : 0;
+}
+
+void JumpTo(DWORD addr, void* target)
+{
+    DWORD prot;
+    VirtualProtect((void*)addr, 5, PAGE_EXECUTE_READWRITE, &prot);
+    *(BYTE*)addr = 0xE9;
+    *(DWORD*)(addr + 1) = (DWORD)target - (addr + 5);
+    VirtualProtect((void*)addr, 5, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), (void*)addr, 5);
+}
+
+const char* __cdecl PromptTextHook(char code)
+{
+    if (PadPrompts()) {
         if (const char* s = PadPrompt(code)) return s;
     }
     return g_originalPromptText(code);
@@ -369,6 +407,11 @@ void Gamepad_Install()
     g_originalPromptText = (PromptText_t)Detour(kPromptText, kPromptTextPrologue, sizeof(kPromptTextPrologue),
                                                 (void*)PromptTextHook);
     Log("gamepad: button prompts %s", g_originalPromptText ? "installed" : "not installed (unknown code)");
+    if (memcmp((void*)kDString, kDStringCode, sizeof(kDStringCode)) == 0 &&
+        memcmp((void*)kDStringLength, kDStringCode, sizeof(kDStringCode)) == 0) {
+        JumpTo(kDString, (void*)DStringHook);
+        JumpTo(kDStringLength, (void*)DStringLengthHook);
+    }
 
     // Check every site first so vibration is either fully installed or not at all.
     bool vibration = g_xinputSetState != nullptr;
