@@ -198,6 +198,9 @@ static DWORD g_magFilter[4] = { D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_POINT, D3D
 static DWORD g_minFilter[4] = { D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_POINT, D3DTEXF_POINT };
 
 static UINT g_curRTWidth;
+static UINT g_bbHeight;  // backbuffer height of the game device
+static UINT g_bigRT;     // size of the enlarged blur targets (0 = off), see "post-effect resolution"
+static int g_numBig;
 
 struct Shadow {
     IDirect3DBaseTexture9* smallTex;   // identity key, not ref-counted
@@ -376,6 +379,9 @@ static void EndDraw(IDirect3DDevice9* dev, unsigned mask)
 static HRESULT STDMETHODCALLTYPE hk_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
 {
     ReleaseShadows();
+    g_numBig = 0;
+    g_bigRT = 0;
+    if (pp) g_bbHeight = pp->BackBufferHeight;
     return o_Reset(dev, pp);
 }
 
@@ -383,6 +389,90 @@ static HRESULT STDMETHODCALLTYPE hk_ResetEx(IDirect3DDevice9Ex* dev, D3DPRESENT_
 {
     ReleaseShadows();
     return o_ResetEx(dev, pp, fm);
+}
+
+// ---------------------------------------------------------------- post-effect resolution
+// Full-screen blur effects (zoom/speed blur) copy the frame into 512x512 render
+// targets, blur it there and stretch it back over the screen - blocky at 4K,
+// and the shadow copies above do not help because the blur renders into these
+// targets. We create them larger (512 * k, k = backbuffer height / 512, max 4).
+// The passes find their size from the surface (0x66b540), except the quad helper
+// 0x66b300, which takes pixel coordinates: scale those while such a target is set.
+static const int kMaxBig = 8;
+static IDirect3DTexture9* g_bigTex[kMaxBig];
+extern "C" float g_quadScale = 1.0f;       // read by the quad hook
+extern "C" void* g_quadOriginal = nullptr;  // trampoline to 0x66b300
+
+static bool IsBigRT(IDirect3DSurface9* surf)
+{
+    if (!surf || !g_numBig) return false;
+    IDirect3DTexture9* tex = nullptr;
+    if (FAILED(surf->GetContainer(__uuidof(IDirect3DTexture9), (void**)&tex)) || !tex) return false;
+    tex->Release();
+    for (int i = 0; i < g_numBig; i++)
+        if (g_bigTex[i] == tex) return true;
+    return false;
+}
+
+// thiscall quad(this, x0, y0, x1, y1, ...): scale the corners if the current
+// target is enlarged and they are still in 512 space.
+extern "C" __declspec(naked) void QuadHook()
+{
+    __asm {
+        fld dword ptr [g_quadScale]
+        fld1
+        fcomip st, st(1)
+        fstp st(0)
+        je done
+        mov eax, 0x44008000          // 513.0f
+        cmp dword ptr [esp + 12], eax // x1 (positive floats compare as ints)
+        ja done
+        cmp dword ptr [esp + 16], eax // y1
+        ja done
+        fld dword ptr [esp + 4]
+        fmul dword ptr [g_quadScale]
+        fstp dword ptr [esp + 4]
+        fld dword ptr [esp + 8]
+        fmul dword ptr [g_quadScale]
+        fstp dword ptr [esp + 8]
+        fld dword ptr [esp + 12]
+        fmul dword ptr [g_quadScale]
+        fstp dword ptr [esp + 12]
+        fld dword ptr [esp + 16]
+        fmul dword ptr [g_quadScale]
+        fstp dword ptr [esp + 16]
+    done:
+        jmp dword ptr [g_quadOriginal]
+    }
+}
+
+static void InstallQuadHook()
+{
+    static bool done;
+    if (done) return;
+    done = true;
+    unsigned char* fn = (unsigned char*)0x0066b300;
+    static const unsigned char prologue[] = { 0x56, 0x8B, 0xF1, 0x80, 0x3E, 0x00 };  // push esi; mov esi,ecx; cmp [esi],0
+    if (memcmp(fn, prologue, sizeof(prologue)) != 0) { Log("post blur: unknown executable, not enabled"); return; }
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return;
+    memcpy(tramp, fn, sizeof(prologue));
+    tramp[6] = 0xE9;
+    *(DWORD*)(tramp + 7) = (DWORD)(fn + 6) - (DWORD)(tramp + 11);
+    g_quadOriginal = tramp;
+    DWORD prot;
+    VirtualProtect(fn, 6, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)QuadHook - (DWORD)(fn + 5);
+    fn[5] = 0x90;
+    VirtualProtect(fn, 6, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, 6);
+}
+
+static void ScaleRect(const RECT* in, RECT& out, float s)
+{
+    out.left = (LONG)(in->left * s); out.top = (LONG)(in->top * s);
+    out.right = (LONG)(in->right * s); out.bottom = (LONG)(in->bottom * s);
 }
 
 // ---------------------------------------------------------------- frame capture (F8; F11 is taken by the GOG overlay)
@@ -461,7 +551,15 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
 static HRESULT STDMETHODCALLTYPE hk_CreateTexture(IDirect3DDevice9* dev, UINT w, UINT h, UINT levels, DWORD usage,
                                                   D3DFORMAT fmt, D3DPOOL pool, IDirect3DTexture9** out, HANDLE* sh)
 {
+    bool big = false;
+    if ((usage & D3DUSAGE_RENDERTARGET) && w == 512 && h == 512 && fmt == D3DFMT_A8R8G8B8 && g_numBig < kMaxBig) {
+        UINT k = g_bbHeight / 512;
+        if (k > 4) k = 4;
+        if (k > 1 && g_bigRT == 0) { g_bigRT = 512 * k; InstallQuadHook(); }
+        if (g_bigRT) { w = h = g_bigRT; big = true; }
+    }
     HRESULT hr = o_CreateTexture(dev, w, h, levels, usage, fmt, pool, out, sh);
+    if (big && SUCCEEDED(hr) && out && *out) g_bigTex[g_numBig++] = *out;
     if (usage & D3DUSAGE_RENDERTARGET)
         Log("game render-target texture %ux%u levels %u fmt %d -> %p (0x%08lx)", w, h, levels, fmt,
             out ? *out : nullptr, hr);
@@ -481,6 +579,7 @@ static HRESULT STDMETHODCALLTYPE hk_SetRenderTarget(IDirect3DDevice9* dev, DWORD
         if (surf && SUCCEEDED(surf->GetDesc(&d))) g_curRTWidth = d.Width;
     }
     if (surf) InvalidateShadowsFor(surf);  // the game is about to render into it
+    if (idx == 0) g_quadScale = IsBigRT(surf) ? g_bigRT / 512.0f : 1.0f;
     return o_SetRenderTarget(dev, idx, surf);
 }
 
@@ -494,6 +593,9 @@ static HRESULT STDMETHODCALLTYPE hk_StretchRect(IDirect3DDevice9* dev, IDirect3D
         Log("cap: StretchRect %p %ux%u %s -> %p %ux%u %s filter %d", src, a.Width, a.Height, sr ? "rect" : "full", dst,
             b.Width, b.Height, dr ? "rect" : "full", f);
     }
+    RECT srS, drS;
+    if (sr && IsBigRT(src)) { ScaleRect(sr, srS, g_bigRT / 512.0f); sr = &srS; }
+    if (dr && IsBigRT(dst)) { ScaleRect(dr, drS, g_bigRT / 512.0f); dr = &drS; }
     HRESULT hr = o_StretchRect(dev, src, sr, dst, dr, f);
     if (!dst) return hr;
     InvalidateShadowsFor(dst);
@@ -667,6 +769,7 @@ static void HookDevice(IDirect3DDevice9* dev, bool isEx)
 static HRESULT STDMETHODCALLTYPE hk_CreateDevice(IDirect3D9* d3d, UINT a, D3DDEVTYPE t, HWND w, DWORD f,
                                                  D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out)
 {
+    if (pp) g_bbHeight = pp->BackBufferHeight;
     HRESULT hr = o_CreateDevice(d3d, a, t, w, f, pp, out);
     Log("CreateDevice(flags 0x%lx, %ux%u) -> 0x%08lx", f, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0, hr);
     if (SUCCEEDED(hr)) {
@@ -685,6 +788,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDeviceEx(IDirect3D9Ex* d3d, UINT a, D3
                                                    D3DPRESENT_PARAMETERS* pp, D3DDISPLAYMODEEX* fm,
                                                    IDirect3DDevice9Ex** out)
 {
+    if (pp) g_bbHeight = pp->BackBufferHeight;
     HRESULT hr = o_CreateDeviceEx(d3d, a, t, w, f, pp, fm, out);
     Log("CreateDeviceEx(flags 0x%lx) -> 0x%08lx", f, hr);
     if (SUCCEEDED(hr) && out && *out) {
@@ -705,6 +809,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDeviceOuter(IDirect3D9* d3d, UINT a, D
                                                       D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out)
 {
     int before = g_devicesHooked;
+    if (pp) g_bbHeight = pp->BackBufferHeight;
     HRESULT hr = o_CreateDeviceOuter(d3d, a, t, w, f, pp, out);
     if (SUCCEEDED(hr) && out && *out && g_devicesHooked == before) {
         Log("CreateDevice (outer, %ux%u) -> 0x%08lx, system hook was bypassed", pp ? pp->BackBufferWidth : 0,
