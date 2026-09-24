@@ -441,27 +441,81 @@ extern "C" __declspec(naked) void QuadHook()
     }
 }
 
+// Blur pass 0x66b540 (thiscall): dst texture, dst w, dst h (float pixels), src
+// texture, src w, src h, kernel, taps, ?, u offset scale, v offset scale. The
+// quad comes from the dst size, the texel step from offset scale / src size.
+// Scale the sizes of enlarged textures and the offset scales with them, so the
+// blur covers the same area with the same radius as before.
+extern "C" void* g_blurOriginal = nullptr;
+
+static bool IsBigTex(void* tex)
+{
+    for (int i = 0; i < g_numBig; i++)
+        if (g_bigTex[i] == tex) return true;
+    return false;
+}
+
+extern "C" void __cdecl BlurAdjust(DWORD* a)  // a[0] = first argument
+{
+    float s = g_bigRT / 512.0f;
+    float* f = (float*)a;
+    bool dst = g_bigRT && IsBigTex((void*)a[0]) && f[1] <= 513.0f && f[2] <= 513.0f;
+    bool src = g_bigRT && IsBigTex((void*)a[3]) && f[4] <= 513.0f && f[5] <= 513.0f;
+    if (g_capture)
+        Log("cap: blur %.0fx%.0f <- %.0fx%.0f offsets %.3f %.3f%s%s", f[1], f[2], f[4], f[5], f[9], f[10],
+            dst ? " (dst scaled)" : "", src ? " (src scaled)" : "");
+    if (dst) { f[1] *= s; f[2] *= s; }
+    if (src) { f[4] *= s; f[5] *= s; f[9] *= s; f[10] *= s; }
+}
+
+extern "C" __declspec(naked) void BlurHook()
+{
+    __asm {
+        push ecx
+        lea eax, [esp + 8]
+        push eax
+        call BlurAdjust
+        add esp, 4
+        pop ecx
+        jmp dword ptr [g_blurOriginal]
+    }
+}
+
+static void* JmpHook(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
+{
+    unsigned char* fn = (unsigned char*)addr;
+    if (memcmp(fn, prologue, len) != 0) return nullptr;
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return nullptr;
+    memcpy(tramp, fn, len);
+    tramp[len] = 0xE9;
+    *(DWORD*)(tramp + len + 1) = (DWORD)(fn + len) - (DWORD)(tramp + len + 5);
+    DWORD prot;
+    VirtualProtect(fn, len, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)hook - (DWORD)(fn + 5);
+    for (size_t i = 5; i < len; i++) fn[i] = 0x90;
+    VirtualProtect(fn, len, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, len);
+    return tramp;
+}
+
 static void InstallQuadHook()
 {
     static bool done;
     if (done) return;
     done = true;
-    unsigned char* fn = (unsigned char*)0x0066b300;
-    static const unsigned char prologue[] = { 0x56, 0x8B, 0xF1, 0x80, 0x3E, 0x00 };  // push esi; mov esi,ecx; cmp [esi],0
-    if (memcmp(fn, prologue, sizeof(prologue)) != 0) { Log("post blur: unknown executable, not enabled"); return; }
-    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
-    if (!tramp) return;
-    memcpy(tramp, fn, sizeof(prologue));
-    tramp[6] = 0xE9;
-    *(DWORD*)(tramp + 7) = (DWORD)(fn + 6) - (DWORD)(tramp + 11);
-    g_quadOriginal = tramp;
-    DWORD prot;
-    VirtualProtect(fn, 6, PAGE_EXECUTE_READWRITE, &prot);
-    fn[0] = 0xE9;
-    *(DWORD*)(fn + 1) = (DWORD)QuadHook - (DWORD)(fn + 5);
-    fn[5] = 0x90;
-    VirtualProtect(fn, 6, prot, &prot);
-    FlushInstructionCache(GetCurrentProcess(), fn, 6);
+    static const unsigned char quadPrologue[] = { 0x56, 0x8B, 0xF1, 0x80, 0x3E, 0x00 };  // push esi; mov esi,ecx; cmp [esi],0
+    static const unsigned char blurPrologue[] = { 0x81, 0xEC, 0x8C, 0x00, 0x00, 0x00 };  // sub esp, 0x8c
+    if (memcmp((void*)0x0066b300, quadPrologue, sizeof(quadPrologue)) != 0 ||
+        memcmp((void*)0x0066b540, blurPrologue, sizeof(blurPrologue)) != 0) {
+        Log("post blur: unknown executable, not enabled");
+        g_bigRTMaxFactor = 1;
+        return;
+    }
+    g_quadOriginal = JmpHook(0x0066b300, quadPrologue, sizeof(quadPrologue), (void*)QuadHook);
+    g_blurOriginal = JmpHook(0x0066b540, blurPrologue, sizeof(blurPrologue), (void*)BlurHook);
+    Log("post blur: blur targets at %u x %u", g_bigRT, g_bigRT);
 }
 
 static void ScaleRect(const RECT* in, RECT& out, float s)
@@ -550,7 +604,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreateTexture(IDirect3DDevice9* dev, UINT w,
         UINT k = g_bbHeight / 512;
         if (k > 4) k = 4;
         if (k > g_bigRTMaxFactor) k = g_bigRTMaxFactor;
-        if (k > 1 && g_bigRT == 0) { g_bigRT = 512 * k; InstallQuadHook(); }
+        if (k > 1 && g_bigRT == 0) { g_bigRT = 512 * k; InstallQuadHook(); if (g_bigRTMaxFactor < 2) g_bigRT = 0; }
         if (g_bigRT) { w = h = g_bigRT; big = true; }
     }
     HRESULT hr = o_CreateTexture(dev, w, h, levels, usage, fmt, pool, out, sh);
