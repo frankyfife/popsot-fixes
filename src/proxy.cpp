@@ -442,10 +442,11 @@ extern "C" __declspec(naked) void QuadHook()
 }
 
 // Blur pass 0x66b540 (thiscall): dst texture, dst w, dst h (float pixels), src
-// texture, src w, src h, kernel, taps, ?, u offset scale, v offset scale. The
-// quad comes from the dst size, the texel step from offset scale / src size.
-// Scale the sizes of enlarged textures and the offset scales with them, so the
-// blur covers the same area with the same radius as before.
+// texture, src w, src h, kernel, taps, ?, u extent, v extent. The quad comes
+// from the dst size; the texture coordinates span the u/v extent (a fraction of
+// the source, e.g. 0.5), and the tap step is extent / src size. Only the dst size
+// is scaled: extents are fractions and stay valid, and keeping the src size keeps
+// the tap step - the blur radius - exactly as before.
 extern "C" void* g_blurOriginal = nullptr;
 
 static bool IsBigTex(void* tex)
@@ -460,12 +461,10 @@ extern "C" void __cdecl BlurAdjust(DWORD* a)  // a[0] = first argument
     float s = g_bigRT / 512.0f;
     float* f = (float*)a;
     bool dst = g_bigRT && IsBigTex((void*)a[0]) && f[1] <= 513.0f && f[2] <= 513.0f;
-    bool src = g_bigRT && IsBigTex((void*)a[3]) && f[4] <= 513.0f && f[5] <= 513.0f;
     if (g_capture)
-        Log("cap: blur %.0fx%.0f <- %.0fx%.0f offsets %.3f %.3f%s%s", f[1], f[2], f[4], f[5], f[9], f[10],
-            dst ? " (dst scaled)" : "", src ? " (src scaled)" : "");
+        Log("cap: blur %.0fx%.0f <- %.0fx%.0f extents %.3f %.3f%s", f[1], f[2], f[4], f[5], f[9], f[10],
+            dst ? " (dst scaled)" : "");
     if (dst) { f[1] *= s; f[2] *= s; }
-    if (src) { f[4] *= s; f[5] *= s; f[9] *= s; f[10] *= s; }
 }
 
 extern "C" __declspec(naked) void BlurHook()
@@ -516,6 +515,21 @@ static void InstallQuadHook()
     g_quadOriginal = JmpHook(0x0066b300, quadPrologue, sizeof(quadPrologue), (void*)QuadHook);
     g_blurOriginal = JmpHook(0x0066b540, blurPrologue, sizeof(blurPrologue), (void*)BlurHook);
     Log("post blur: blur targets at %u x %u", g_bigRT, g_bigRT);
+}
+
+// [post] blur=0: skip the full-screen blur effect (render method 0x670710 of the
+// effect object with vtable 0x7b18e4; zoom/speed blur).
+static void DisableBlurEffect()
+{
+    unsigned char* fn = (unsigned char*)0x00670710;
+    static const unsigned char prologue[] = { 0x83, 0xEC, 0x30, 0x53, 0x55 };  // sub esp,0x30; push ebx; push ebp
+    if (memcmp(fn, prologue, sizeof(prologue)) != 0) { Log("post blur: unknown executable, blur left on"); return; }
+    DWORD prot;
+    VirtualProtect(fn, 1, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xC3;  // ret
+    VirtualProtect(fn, 1, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, 1);
+    Log("post blur: full-screen blur effect disabled");
 }
 
 static void ScaleRect(const RECT* in, RECT& out, float s)
@@ -989,6 +1003,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
             float f = (float)atof(v);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;
+            if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
             UINT k = GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
             g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
         }
