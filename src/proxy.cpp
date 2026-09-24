@@ -294,6 +294,7 @@ static bool EnsureShadowTexture(IDirect3DDevice9* dev, Shadow& sh, const D3DSURF
 
 static bool g_loggedSubst, g_loggedWater, g_loggedLinear;
 static bool g_enabled = true;  // toggled with F10
+static bool g_verbose;  // [debug] verbose: menu tracing and per-frame statistics in popfix.log
 
 // Per-interval statistics of small render-target textures sampled while drawing
 // into a larger target (i.e. upscaled post-effect buffers).
@@ -611,15 +612,17 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         Log("cap: ---- F8 frame capture");
     }
     if (++frames == 300) {
-        DumpStats(frames);
-        Trace_Dump();
+        if (g_verbose) {
+            DumpStats(frames);
+            Trace_Dump();
+        }
         frames = 0;
     }
     MenuPad_OnPresent();
     MenuCam_OnPresent(!g_gameWindow || GetForegroundWindow() == g_gameWindow);
     Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
-    Trace_ProbeMenuManager();
+    if (g_verbose) Trace_ProbeMenuManager();
     return o_Present(dev, sr, dr, w, rgn);
 }
 
@@ -638,7 +641,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreateTexture(IDirect3DDevice9* dev, UINT w,
     HRESULT hr = o_CreateTexture(dev, w, h, levels, usage, fmt, pool, out, sh);
     if (big && SUCCEEDED(hr) && out && *out) g_bigTex[g_numBig++] = *out;
     if (SUCCEEDED(hr) && out && *out) Video_TextureCreated(*out);
-    if (usage & D3DUSAGE_RENDERTARGET)
+    if (g_verbose && (usage & D3DUSAGE_RENDERTARGET))
         Log("game render-target texture %ux%u levels %u fmt %d -> %p (0x%08lx)", w, h, levels, fmt,
             out ? *out : nullptr, hr);
     return hr;
@@ -952,7 +955,7 @@ static void EnsureSystemHooks()
 extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
 {
     EnsureSystemHooks();
-    Trace_Install();
+    if (g_verbose) Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
@@ -968,7 +971,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
 extern "C" HRESULT WINAPI Proxy_Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out)
 {
     EnsureSystemHooks();
-    Trace_Install();
+    if (g_verbose) Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
@@ -983,7 +986,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out)
 extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9On12(UINT sdk, void* args, UINT n)
 {
     EnsureSystemHooks();
-    Trace_Install();
+    if (g_verbose) Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
@@ -998,7 +1001,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9On12(UINT sdk, void* args, UI
 extern "C" HRESULT WINAPI Proxy_Direct3DCreate9On12Ex(UINT sdk, void* args, UINT n, IDirect3D9Ex** out)
 {
     EnsureSystemHooks();
-    Trace_Install();
+    if (g_verbose) Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
@@ -1030,6 +1033,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             strcpy(slash + 1, "popfix.ini");
             strcpy(g_iniPath, path);
             char v[32];
+            g_verbose = GetPrivateProfileIntA("debug", "verbose", 0, g_iniPath) != 0;
             GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
             float f = (float)atof(v);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;

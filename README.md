@@ -113,6 +113,7 @@ file is the default.
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |
+| `[debug] verbose` | `0` | 1 = detailed diagnostics in `popfix.log` |
 
 ## Requirements
 

@@ -207,8 +207,8 @@ BYTE* __cdecl ParseWorldHook(void* data)
             memcpy(name, world + kWorldName, 60);
             name[60] = 0;
             bool menu = _stricmp(name, kMenuWorld) == 0;
+            if (menu && !g_menuLoaded) Log("menu camera: main menu world \"%s\" loaded", name);
             if (menu) g_menuLoaded = true;
-            Log("menu camera: world \"%s\" loaded%s", name, menu ? " (main menu)" : "");
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
