@@ -119,6 +119,33 @@ int ListRow(char* elem)
     return w && *(DWORD*)w == kListVtable ? *(int*)(w + 0x30) : -1;
 }
 
+typedef int(__thiscall* ListHitTest_t)(void* list, const short* pos);  // row index or -1
+const ListHitTest_t ListHitTest = (ListHitTest_t)0x00714e70;
+
+// Position of a list row, found with the list's own hit test (the one the page
+// uses for clicks). Scrolls the row into view first if needed.
+bool ListRowPoint(char* w, int row, int& x, int& y)
+{
+    int visible = *(int*)(w + 0x7c);
+    int& first = *(int*)(w + 0x80);
+    if (visible > 0) {
+        if (row < first) first = row;
+        else if (row >= first + visible) first = row - visible + 1;
+    }
+    const short* rows = (const short*)(w + 0x6c);  // x0, x1, y0, y1
+    short pos[2] = { (short)((rows[0] + rows[1]) / 2), 0 };
+    int top = -1, bottom = -1;
+    for (int yy = rows[2]; yy <= rows[3]; yy++) {
+        pos[1] = (short)yy;
+        if (ListHitTest(w, pos) == row) { if (top < 0) top = yy; bottom = yy; }
+        else if (top >= 0) break;
+    }
+    if (top < 0) return false;
+    x = pos[0];
+    y = (top + bottom) / 2;
+    return true;
+}
+
 // Put the (virtual) mouse cursor on the focused element - or on the current row
 // of a list - so the game shows its normal hover highlight there.
 void PointAt(void* mgr, char* elem)
@@ -128,12 +155,13 @@ void PointAt(void* mgr, char* elem)
     if (!Center(elem, x, y)) return;
     char* w = *(char**)(elem + 0x2c);
     if (*(DWORD*)w == kListVtable) {
-        const short* rows = (const short*)(w + 0x6c);  // rows rect x0, x1, y0, y1
-        int visible = *(int*)(w + 0x7c), first = *(int*)(w + 0x80), cur = *(int*)(w + 0x30);
-        if (visible > 0 && cur >= first && cur < first + visible) {
-            int h = (rows[3] - rows[2] + 1) / visible;
-            x = (rows[0] + rows[1]) / 2;
-            y = rows[2] + (cur - first) * h + h / 2;
+        int row = *(int*)(w + 0x30);
+        if (!ListRowPoint(w, row, x, y)) {
+            static int logged;
+            if (logged++ < 5)
+                Log("menu pad: list row %d not found (rows %d..%d x %d..%d, visible %d, first %d)", row,
+                    ((short*)(w + 0x6c))[2], ((short*)(w + 0x6c))[3], ((short*)(w + 0x6c))[0],
+                    ((short*)(w + 0x6c))[1], *(int*)(w + 0x7c), *(int*)(w + 0x80));
         }
     }
     DWORD pos = (DWORD)(WORD)(short)x | ((DWORD)(WORD)(short)y << 16);
@@ -158,6 +186,7 @@ const Signature kSignatures[] = {
     { 0x007b7d90, { 0xA0, 0x89, 0x71, 0x00, 0x30, 0x88, 0x71, 0x00 } },  // slider vtable
     { 0x007125f0, { 0x83, 0xEC, 0x08, 0x8B, 0x44, 0x24, 0x0C, 0x8B } },
     { 0x00712560, { 0x8B, 0x54, 0x24, 0x04, 0x8B, 0x42, 0x04, 0x89 } },
+    { 0x00714e70, { 0x83, 0xEC, 0x0C, 0x53, 0x55, 0x56, 0x8B, 0xF1 } },
 };
 
 // ---------------------------------------------------------------- XInput
@@ -342,7 +371,8 @@ void Update()
         if (ListRow(focus) >= 0) {
             PointAt(mgr, focus);
             DWORD ev[2] = { 1, g_cursorSet };
-            Log("menu pad: double click on %s row %d", ElementName(focus), ListRow(focus));
+            Log("menu pad: double click on %s row %d at %d,%d", ElementName(focus), ListRow(focus),
+                (short)(g_cursorSet & 0xffff), (short)(g_cursorSet >> 16));
             MgrDoubleClick(mgr, ev);
         } else {
             Press(mgr, VK_RETURN);
