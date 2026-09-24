@@ -6,10 +6,10 @@
 // right edges. The PS3 HD version solves this by placing the menu camera further
 // back; we do the same.
 //
-// Every frame the main view builds its view matrix from the camera matrix with
-// 0x437f70 (called from 0x425db0 at 0x425e48). The camera struct (display +0xcc)
+// The view matrix is built from the camera matrix by 0x437f70, several times per
+// frame (main view 0x425db0, visibility 0x47b3b0, ...). The camera struct (display +0xcc)
 // holds the camera's world matrix at +0x88: rows I (+0x88), J (+0x98),
-// K (+0xa8, viewing direction) and the position at +0xb8. We redirect that call
+// K (+0xa8, viewing direction) and the position at +0xb8. We detour 0x437f70
 // and, while the menu world is loaded, move the position back along K first.
 // The engine rewrites the camera matrix every frame; if it did not, the stored
 // base position is reused so the offset never accumulates.
@@ -31,8 +31,8 @@ void Log(const char* fmt, ...);
 
 namespace {
 
-const DWORD kViewCall = 0x00425e48;       // call 0x437f70 inside 0x425db0
 const DWORD kViewFromCamera = 0x00437f70;  // cdecl void(camera*)
+const unsigned char kViewFromCameraPrologue[] = { 0x8B, 0x44, 0x24, 0x04, 0x56, 0x57 };
 const DWORD kParseWorld = 0x0068bc80;
 const DWORD kParseWorldPushes[] = { 0x006780c9, 0x0068c1c1 };  // push 0x68bc80
 const DWORD kWorldName = 0x1d8;
@@ -40,6 +40,7 @@ const char kMenuWorld[] = "menu3D";
 const float kMenuCamPos[3] = { -83.59f, 1.39f, -2.66f };  // Camera02 in menu3D
 
 typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
+ViewFromCamera_t g_viewFromCamera;  // trampoline
 
 float g_back = 0.0f;  // [menus] camera_back
 bool g_installed;
@@ -74,6 +75,24 @@ bool IsMenuCamera(const float* pos)
     return d2 < 1.0f;
 }
 
+void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
+{
+    unsigned char* fn = (unsigned char*)addr;
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return nullptr;
+    memcpy(tramp, fn, len);
+    tramp[len] = 0xE9;
+    *(DWORD*)(tramp + len + 1) = (DWORD)(fn + len) - (DWORD)(tramp + len + 5);
+    DWORD prot;
+    VirtualProtect(fn, len, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)hook - (DWORD)(fn + 5);
+    for (size_t i = 5; i < len; i++) fn[i] = 0x90;
+    VirtualProtect(fn, len, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, len);
+    return tramp;
+}
+
 void __cdecl ViewFromCameraHook(BYTE* cam)
 {
     __try {
@@ -81,11 +100,13 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         const float* k = (const float*)(cam + 0xa8);
         bool ours = g_haveOut && memcmp(pos, g_out, sizeof(g_out)) == 0;
         if (!ours) memcpy(g_base, pos, sizeof(g_base));
-        static DWORD lastLog;
+        static DWORD lastLog, calls;
+        calls++;
         if (GetTickCount() - lastLog > 5000) {
             lastLog = GetTickCount();
-            Log("menu camera: cam %p pos %.2f %.2f %.2f dir %.2f %.2f %.2f menu %d", cam, g_base[0], g_base[1],
-                g_base[2], k[0], k[1], k[2], IsMenuCamera(g_base));
+            Log("menu camera: cam %p pos %.2f %.2f %.2f dir %.2f %.2f %.2f menu %d (%lu calls)", cam, g_base[0],
+                g_base[1], g_base[2], k[0], k[1], k[2], IsMenuCamera(g_base), calls);
+            calls = 0;
         }
         if (IsMenuCamera(g_base) && g_back != 0.0f) {
             for (int i = 0; i < 3; i++) pos[i] = g_base[i] - g_back * k[i];
@@ -97,7 +118,7 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    ((ViewFromCamera_t)kViewFromCamera)(cam);
+    g_viewFromCamera(cam);
 }
 
 }  // namespace
@@ -106,25 +127,22 @@ void MenuCam_Install(float back)
 {
     if (g_installed) return;
     g_back = back;
-    unsigned char* p = (unsigned char*)kViewCall;
-    bool known = p[0] == 0xE8 && (DWORD)(p + 5) + *(DWORD*)(p + 1) == kViewFromCamera;
+    bool known = memcmp((void*)kViewFromCamera, kViewFromCameraPrologue, sizeof(kViewFromCameraPrologue)) == 0;
     for (DWORD push : kParseWorldPushes)
         known = known && *(BYTE*)push == 0x68 && *(DWORD*)(push + 1) == kParseWorld;
     if (!known) {
         Log("menu camera: unknown executable, not enabled");
         return;
     }
+    g_viewFromCamera = (ViewFromCamera_t)Detour(kViewFromCamera, kViewFromCameraPrologue,
+                                                sizeof(kViewFromCameraPrologue), (void*)ViewFromCameraHook);
+    if (!g_viewFromCamera) return;
     for (DWORD push : kParseWorldPushes) {
         DWORD prot;
         VirtualProtect((void*)(push + 1), 4, PAGE_EXECUTE_READWRITE, &prot);
         *(DWORD*)(push + 1) = (DWORD)ParseWorldHook;
         VirtualProtect((void*)(push + 1), 4, prot, &prot);
     }
-    DWORD prot;
-    VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &prot);
-    *(DWORD*)(p + 1) = (DWORD)ViewFromCameraHook - (DWORD)(p + 5);
-    VirtualProtect(p, 5, prot, &prot);
-    FlushInstructionCache(GetCurrentProcess(), p, 5);
     g_installed = true;
     Log("menu camera: enabled, camera_back %.2f", g_back);
 }
