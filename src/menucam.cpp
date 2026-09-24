@@ -14,8 +14,11 @@
 // The engine rewrites the camera matrix every frame; if it did not, the stored
 // base position is reused so the offset never accumulates.
 //
-// The current world is *(0xaf5650); its name (char[60]) is at +0x1d8, filled by
-// the world loader 0x68bc80 from the .wow file.
+// The menu is detected by the world the game loads: the world loader 0x68c180
+// (cdecl world*(superWorld, key, flag)) returns the loaded world, whose name
+// (char[60], read from the .wow file by 0x68bc80) is at +0x1d8. The current
+// world *(0xaf5650) is not usable for this: loaded worlds are merged into a
+// "SuperWorld".
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -28,7 +31,8 @@ namespace {
 
 const DWORD kViewCall = 0x00425e48;       // call 0x437f70 inside 0x425db0
 const DWORD kViewFromCamera = 0x00437f70;  // cdecl void(camera*)
-const DWORD kCurrentWorld = 0x00af5650;
+const DWORD kLoadWorld = 0x0068c180;
+const unsigned char kLoadWorldPrologue[] = { 0x83, 0xEC, 0x08, 0x56, 0x8B, 0x74, 0x24, 0x14 };
 const DWORD kWorldName = 0x1d8;
 const char kMenuWorld[] = "menu3D";
 
@@ -36,26 +40,48 @@ typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
 
 float g_back = 0.0f;  // [menus] camera_back
 bool g_installed;
-BYTE* g_lastWorld;
 bool g_inMenu;
 bool g_haveOut;
 float g_base[3], g_out[3];
 
-bool IsMenuWorld()
+typedef BYTE*(__cdecl* LoadWorld_t)(void* superWorld, DWORD key, int flag);
+LoadWorld_t g_loadWorld;  // trampoline
+
+BYTE* __cdecl LoadWorldHook(void* superWorld, DWORD key, int flag)
 {
-    BYTE* world = *(BYTE**)kCurrentWorld;
-    if (world != g_lastWorld) {
-        g_lastWorld = world;
-        g_inMenu = false;
+    BYTE* world = g_loadWorld(superWorld, key, flag);
+    __try {
         if (world) {
             char name[61];
             memcpy(name, world + kWorldName, 60);
             name[60] = 0;
             g_inMenu = _stricmp(name, kMenuWorld) == 0;
-            Log("menu camera: world \"%s\"%s", name, g_inMenu ? " (menu)" : "");
+            Log("menu camera: world %08lx \"%s\" loaded%s", key, name, g_inMenu ? " (main menu)" : "");
         }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
-    return g_inMenu;
+    return world;
+}
+
+bool IsMenuWorld() { return g_inMenu; }
+
+void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
+{
+    unsigned char* fn = (unsigned char*)addr;
+    if (memcmp(fn, prologue, len) != 0) return nullptr;
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return nullptr;
+    memcpy(tramp, fn, len);
+    tramp[len] = 0xE9;
+    *(DWORD*)(tramp + len + 1) = (DWORD)(fn + len) - (DWORD)(tramp + len + 5);
+    DWORD prot;
+    VirtualProtect(fn, len, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)hook - (DWORD)(fn + 5);
+    for (size_t i = 5; i < len; i++) fn[i] = 0x90;
+    VirtualProtect(fn, len, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, len);
+    return tramp;
 }
 
 void __cdecl ViewFromCameraHook(BYTE* cam)
@@ -85,10 +111,13 @@ void MenuCam_Install(float back)
     if (g_installed) return;
     g_back = back;
     unsigned char* p = (unsigned char*)kViewCall;
-    if (p[0] != 0xE8 || (DWORD)(p + 5) + *(DWORD*)(p + 1) != kViewFromCamera) {
+    if (p[0] != 0xE8 || (DWORD)(p + 5) + *(DWORD*)(p + 1) != kViewFromCamera ||
+        memcmp((void*)kLoadWorld, kLoadWorldPrologue, sizeof(kLoadWorldPrologue)) != 0) {
         Log("menu camera: unknown executable, not enabled");
         return;
     }
+    g_loadWorld = (LoadWorld_t)Detour(kLoadWorld, kLoadWorldPrologue, sizeof(kLoadWorldPrologue), (void*)LoadWorldHook);
+    if (!g_loadWorld) return;
     DWORD prot;
     VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &prot);
     *(DWORD*)(p + 1) = (DWORD)ViewFromCameraHook - (DWORD)(p + 5);
