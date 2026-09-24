@@ -211,8 +211,44 @@ const LoadGame_t PcLoadGame = (LoadGame_t)0x0041c620;
 const DWORD kSaveCall = 0x0046206c;
 const DWORD kLoadCalls[] = { 0x0046209f, 0x004622cd };
 
+// Save files live in the folder of the current PC profile (*(0x80cc9c), a name
+// from the profile list at 0x80ccac, count at 0x80ccb0). Only the PC profile page
+// selects one (0x41b080), so with the console menus there is none. Pick the first
+// existing profile (the console version has no profiles); create one if there is
+// none. The profile's options are not loaded - the game keeps its current settings.
+typedef void(__cdecl* RefreshProfiles_t)();
+typedef int(__cdecl* SelectProfile_t)(const wchar_t* name);
+typedef int(__cdecl* CreateProfile_t)(const wchar_t* name);
+const RefreshProfiles_t RefreshProfiles = (RefreshProfiles_t)0x0041b070;
+const SelectProfile_t SelectProfile = (SelectProfile_t)0x0041b080;
+const CreateProfile_t CreateProfile = (CreateProfile_t)0x0041b150;
+const wchar_t* const* const g_currentProfile = (const wchar_t* const*)0x0080cc9c;
+DWORD** const g_profileList = (DWORD**)0x0080ccac;  // list head node
+const int* const g_profileCount = (const int*)0x0080ccb0;
+
+bool EnsureProfile()
+{
+    if (*g_currentProfile) return true;
+    if (*g_profileCount == 0) RefreshProfiles();
+    if (*g_profileCount == 0) {
+        int r = CreateProfile(L"Prince");
+        Log("console menu: no PC profile, created \"Prince\" -> %d", r);
+        RefreshProfiles();
+    }
+    DWORD* head = *g_profileList;
+    if (*g_profileCount == 0 || !head || (DWORD*)head[0] == head) {
+        Log("console menu: no PC profile available, saving disabled");
+        return false;
+    }
+    const wchar_t* name = (const wchar_t*)((DWORD*)head[0])[2];  // first node's name
+    SelectProfile(name);
+    Log("console menu: using PC profile \"%ls\" for save games", name);
+    return *g_currentProfile != nullptr;
+}
+
 int __cdecl SaveGameHook(int slot, int kind, void* data, int size)
 {
+    if (!EnsureProfile()) return 0;
     EnumSaves();
     int ok = PcSaveGame(slot, kind, data, size);
     Log("console menu: save game slot %d -> %d", slot, ok);
@@ -221,6 +257,7 @@ int __cdecl SaveGameHook(int slot, int kind, void* data, int size)
 
 int __cdecl LoadGameHook(int slot, void* data, int size)
 {
+    if (!EnsureProfile()) return 0;
     EnumSaves();
     int ok = PcLoadGame(slot, data, size);
     Log("console menu: load game slot %d -> %d", slot, ok);
