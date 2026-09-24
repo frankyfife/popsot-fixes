@@ -128,10 +128,7 @@ void Trace_ProbeMenuManager()
         for (int i = 1; i <= open && i < 32; i++) {
             DWORD page = *(DWORD*)(mgr + 0x6c + i * 4);
             sig = sig * 131 + page + (page ? *(DWORD*)(page + 0x84) : 0);
-            if (page && *(DWORD*)(page + 0xac)) {
-                DWORD list = *(DWORD*)(page + 0xac);
-                sig = sig * 131 + *(DWORD*)(list + 8) + *(DWORD*)(page + 0xb4);
-            }
+            if (page) sig = sig * 131 + *(DWORD*)(page + 0xb0) + *(DWORD*)(page + 0xb4);
         }
         if (sig == lastSig) return;
         lastSig = sig;
@@ -146,23 +143,23 @@ void Trace_ProbeMenuManager()
         for (int i = 1; i <= open && i < 32; i++) {
             DWORD page = *(DWORD*)(mgr + 0x6c + i * 4);
             Log("  open page %d: %08lx state %d", i, page, page ? *(int*)(page + 0x84) : -1);
-            // Console text list of the page (Xbox fills it with save game names):
-            // list object at +0xac {?, head node, size}, node {next, prev, char*},
-            // current node at +0xb4.
-            DWORD list = page ? *(DWORD*)(page + 0xac) : 0;
-            if (!list) continue;
-            DWORD head = *(DWORD*)(list + 4);
-            int size = *(int*)(list + 8);
-            Log("    text list %08lx: %d items, current node %08lx, +b0 %08lx +b8 %08lx", list, size,
-                *(DWORD*)(page + 0xb4), *(DWORD*)(page + 0xb0), *(DWORD*)(page + 0xb8));
+            // Console text list of the page (Xbox 0x2c84c0 fills it with save game
+            // names): +0xac head node of a list of {next, prev, char*}, +0xb0 count,
+            // +0xb4 current node.
+            DWORD head = page ? *(DWORD*)(page + 0xac) : 0;
+            if (!head) continue;
+            int count = *(int*)(page + 0xb0);
+            Log("    text list: %d items, head %08lx, current %08lx, +b8 %08lx", count, head,
+                *(DWORD*)(page + 0xb4), *(DWORD*)(page + 0xb8));
             int k = 0;
-            for (DWORD node = head ? *(DWORD*)head : 0; node && node != head && k < 12; node = *(DWORD*)node, k++) {
+            for (DWORD node = *(DWORD*)head; node && node != head && k < 12; node = *(DWORD*)node, k++) {
                 const char* text = *(const char**)(node + 8);
                 Log("      [%d] node %08lx \"%.60s\"", k, node, text ? text : "(null)");
             }
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
-        Log("probe: exception while reading the menu manager");
+        static int logged;
+        if (logged++ < 3) Log("probe: exception while reading the menu manager");
     }
 }
 
