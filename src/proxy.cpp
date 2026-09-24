@@ -27,6 +27,7 @@
 #include "trace.h"
 #include "consolemenu.h"
 #include "gamepad.h"
+#include "menucam.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -605,6 +606,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         frames = 0;
     }
     MenuPad_OnPresent();
+    MenuCam_OnPresent(!g_gameWindow || GetForegroundWindow() == g_gameWindow);
     Gamepad_OnFrame(g_gameWindow);
     Trace_ProbeMenuManager();
     return o_Present(dev, sr, dr, w, rgn);
@@ -760,6 +762,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreatePixelShader(IDirect3DDevice9* dev, con
 static const float kPcRefract[4] = { 0.6f, 0.36f, 0.04375f, 0.009375f };
 static const float kXboxZOffset = 3.0f, kXboxZMax = 10.0f;
 static float g_refractScale = 1.5f;
+static float g_menuCamBack = 2.0f;  // [menus] camera_back, see menucam.cpp
 static bool g_loggedRefract;
 static char g_iniPath[MAX_PATH];
 
@@ -938,6 +941,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
+    MenuCam_Install(g_menuCamBack);
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT))p_Direct3DCreate9)(sdk);
     Log("Direct3DCreate9(%u) -> %p", sdk, d3d);
     HookOuterD3D(d3d);
@@ -951,6 +955,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out)
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
+    MenuCam_Install(g_menuCamBack);
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, IDirect3D9Ex**))p_Direct3DCreate9Ex)(sdk, out);
     Log("Direct3DCreate9Ex(%u) -> 0x%08lx", sdk, hr);
     return hr;
@@ -963,6 +968,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9On12(UINT sdk, void* args, UI
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
+    MenuCam_Install(g_menuCamBack);
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT, void*, UINT))p_Direct3DCreate9On12)(sdk, args, n);
     Log("Direct3DCreate9On12(%u) -> %p", sdk, d3d);
     return d3d;
@@ -975,6 +981,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9On12Ex(UINT sdk, void* args, UINT
     ConsoleMenu_Enable();
     Gamepad_Install();
     MenuPad_Install();
+    MenuCam_Install(g_menuCamBack);
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, void*, UINT, IDirect3D9Ex**))p_Direct3DCreate9On12Ex)(sdk, args, n, out);
     Log("Direct3DCreate9On12Ex(%u) -> 0x%08lx", sdk, hr);
     return hr;
@@ -1006,6 +1013,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
             UINT k = GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
             g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
+            GetPrivateProfileStringA("menus", "camera_back", "2.0", v, sizeof(v), g_iniPath);
+            g_menuCamBack = (float)atof(v);
         }
         if (slash) strcpy(slash + 1, "dx_gog.dll");
         g_gog = LoadLibraryA(path);
