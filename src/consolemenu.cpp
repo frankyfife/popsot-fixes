@@ -193,6 +193,56 @@ int __cdecl DialogAnswer(int id)
     return answer;
 }
 
+// ---------------------------------------------------------------- save files
+// The PC port replaced the Xbox storage API with its own save files
+// (Profiles\<name>\SaveN.SAV). The script save/load functions call
+//   0x41c810 PCHD_SaveGame(slot, ..., data, size)   (from 0x46206c)
+//   0x41c620 PCHD_LoadGame(slot, data, size)        (from 0x46209f, 0x4622cd)
+// which look the slot up in a list of save files (*(0x80ccb4)) that only the
+// PC mouse pages build (0x41d180, before showing their save/load lists). With the
+// console menus that list is never built and saving crashes on a null pointer.
+// We build it right before these calls; 0x41d180 does nothing if it exists.
+typedef void(__cdecl* EnumSaves_t)();
+typedef int(__cdecl* SaveGame_t)(int slot, int kind, void* data, int size);
+typedef int(__cdecl* LoadGame_t)(int slot, void* data, int size);
+const EnumSaves_t EnumSaves = (EnumSaves_t)0x0041d180;
+const SaveGame_t PcSaveGame = (SaveGame_t)0x0041c810;
+const LoadGame_t PcLoadGame = (LoadGame_t)0x0041c620;
+const DWORD kSaveCall = 0x0046206c;
+const DWORD kLoadCalls[] = { 0x0046209f, 0x004622cd };
+
+int __cdecl SaveGameHook(int slot, int kind, void* data, int size)
+{
+    EnumSaves();
+    int ok = PcSaveGame(slot, kind, data, size);
+    Log("console menu: save game slot %d -> %d", slot, ok);
+    return ok;
+}
+
+int __cdecl LoadGameHook(int slot, void* data, int size)
+{
+    EnumSaves();
+    int ok = PcLoadGame(slot, data, size);
+    Log("console menu: load game slot %d -> %d", slot, ok);
+    return ok;
+}
+
+bool IsCallTo(DWORD site, DWORD target)
+{
+    const unsigned char* p = (const unsigned char*)site;
+    return p[0] == 0xE8 && site + 5 + *(const int*)(p + 1) == target;
+}
+
+void RedirectCall(DWORD site, void* target)
+{
+    unsigned char* p = (unsigned char*)site;
+    DWORD prot;
+    VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &prot);
+    *(DWORD*)(p + 1) = (DWORD)target - (site + 5);
+    VirtualProtect(p, 5, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), p, 5);
+}
+
 bool Patch(DWORD addr, const unsigned char* expect, size_t len, const unsigned char* bytes, size_t n)
 {
     unsigned char* fn = (unsigned char*)addr;
@@ -222,7 +272,9 @@ void ConsoleMenu_Enable()
         memcmp((void*)kPadClearBranch, kPadClearBranchBytes, sizeof(kPadClearBranchBytes)) != 0 ||
         memcmp((void*)kElemSetVisible, kElemSetVisiblePrologue, sizeof(kElemSetVisiblePrologue)) != 0 ||
         memcmp((void*)kSavePageCall, kSavePageCallBytes, sizeof(kSavePageCallBytes)) != 0 ||
-        memcmp((void*)kDialogAnswer, kDialogAnswerBytes, sizeof(kDialogAnswerBytes)) != 0) {
+        memcmp((void*)kDialogAnswer, kDialogAnswerBytes, sizeof(kDialogAnswerBytes)) != 0 ||
+        !IsCallTo(kSaveCall, (DWORD)PcSaveGame) || !IsCallTo(kLoadCalls[0], (DWORD)PcLoadGame) ||
+        !IsCallTo(kLoadCalls[1], (DWORD)PcLoadGame)) {
         Log("console menu: unknown executable, not enabled");
         return;
     }
@@ -245,6 +297,9 @@ void ConsoleMenu_Enable()
 
     *(DWORD*)(jmp + 1) = (DWORD)DialogAnswer - (kDialogAnswer + 5);
     Patch(kDialogAnswer, kDialogAnswerBytes, sizeof(kDialogAnswerBytes), jmp, sizeof(jmp));
+
+    RedirectCall(kSaveCall, (void*)SaveGameHook);
+    for (DWORD site : kLoadCalls) RedirectCall(site, (void*)LoadGameHook);
 
     Log("console menu: enabled (PC redirect removed, Xbox menu tick restored, pad input kept, element show restored, "
         "console save dialog)");

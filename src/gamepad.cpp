@@ -48,6 +48,8 @@ bool g_padConnected;
 DWORD g_padSlot;  // XInput slot of g_pad
 DWORD g_padTick;
 
+void UpdateMotors();  // vibration, below
+
 void RefreshPad()
 {
     DWORD now = GetTickCount();
@@ -63,6 +65,7 @@ void RefreshPad()
         g_padSlot = i;
         static int loggedSlot = -1;
         if (loggedSlot != (int)i) { loggedSlot = (int)i; Log("gamepad: XInput controller in slot %lu", i); }
+        UpdateMotors();
         return;
     }
 }
@@ -174,16 +177,24 @@ const int* const g_vibrationEnabled = (const int*)0x007f157c;
 
 typedef DWORD(WINAPI* XInputSetState_t)(DWORD, XINPUT_VIBRATION*);
 XInputSetState_t g_xinputSetState;
-int g_smallFrames, g_largeFrames;
+// A motor runs until its deadline. Game frames are converted to time (the Xbox
+// counts them down per 30 Hz game frame), so the motors do not depend on the
+// render loop and always stop on time.
+const DWORD kMsPerFrame = 33;
+DWORD g_smallUntil, g_largeUntil;
 WORD g_largeSpeed;
 WORD g_lastLeft, g_lastRight;
 
 int g_loggedMotorCalls;
 
+void UpdateMotors();
+
 void __cdecl SmallMotor(int pad, int frames)
 {
     if (g_loggedMotorCalls < 20) { g_loggedMotorCalls++; Log("vibration: small motor pad %d frames %d", pad, frames); }
-    if (pad == 0) g_smallFrames = frames > 0 ? frames : 0;
+    if (pad != 0) return;
+    g_smallUntil = GetTickCount() + (frames > 0 ? frames * kMsPerFrame : 0);
+    UpdateMotors();
 }
 
 void __cdecl LargeMotor(int pad, int strength, int frames)
@@ -193,18 +204,46 @@ void __cdecl LargeMotor(int pad, int strength, int frames)
         Log("vibration: large motor pad %d strength %d frames %d", pad, strength, frames);
     }
     if (pad != 0) return;
-    g_largeFrames = frames > 0 ? frames : 0;
+    g_largeUntil = GetTickCount() + (frames > 0 ? frames * kMsPerFrame : 0);
     g_largeSpeed = strength > 255 ? 65535 : strength <= 0 ? 0 : (WORD)(strength * 65535 / 255);
+    UpdateMotors();
 }
 
 void SetMotors(WORD left, WORD right)
 {
     if (!g_xinputSetState || (left == g_lastLeft && right == g_lastRight)) return;
     XINPUT_VIBRATION v = { left, right };
-    if (g_xinputSetState(g_padSlot, &v) == ERROR_SUCCESS) {
+    DWORD r = g_xinputSetState(g_padSlot, &v);
+    if (r == ERROR_SUCCESS) {
         g_lastLeft = left;
         g_lastRight = right;
     }
+    static int logged;
+    if (logged < 6) { logged++; Log("vibration: motors %u/%u on slot %lu -> %lu", left, right, g_padSlot, r); }
+}
+
+bool GameInForeground()
+{
+    DWORD pid = 0;
+    HWND fg = GetForegroundWindow();
+    if (fg) GetWindowThreadProcessId(fg, &pid);
+    return pid == GetCurrentProcessId();
+}
+
+// Called whenever the pad is read (several times per game frame) and on motor calls.
+void UpdateMotors()
+{
+    if (!g_xinputSetState) return;
+    DWORD now = GetTickCount();
+    bool smallOn = (int)(g_smallUntil - now) > 0, largeOn = (int)(g_largeUntil - now) > 0;
+    bool active = (smallOn || largeOn) && *g_vibrationEnabled && g_padConnected && GameInForeground();
+    static bool loggedBlocked;
+    if ((smallOn || largeOn) && !active && !loggedBlocked) {
+        loggedBlocked = true;
+        Log("vibration: blocked (option %d, pad %d, foreground %d)", *g_vibrationEnabled, g_padConnected,
+            GameInForeground());
+    }
+    SetMotors(active && largeOn ? g_largeSpeed : 0, active && smallOn ? 0xFFFF : 0);
 }
 
 bool IsEmptyCall(DWORD site)
@@ -284,24 +323,13 @@ void Gamepad_Install()
     Log("gamepad: vibration installed");
 }
 
-void Gamepad_OnFrame(HWND gameWindow)
+void Gamepad_OnFrame(HWND /*gameWindow*/)
 {
-    if (!g_xinputSetState) return;
-    if (g_smallFrames > 0) g_smallFrames--;
-    if (g_largeFrames > 0) g_largeFrames--;
-    bool wanted = g_smallFrames > 0 || g_largeFrames > 0;
-    bool active = *g_vibrationEnabled && g_padConnected && GetForegroundWindow() == gameWindow;
-    static bool loggedBlocked;
-    if (wanted && !active && !loggedBlocked) {
-        loggedBlocked = true;
-        Log("vibration: blocked (option %d, pad %d, foreground %p, game window %p)", *g_vibrationEnabled,
-            g_padConnected, GetForegroundWindow(), gameWindow);
-    }
-    SetMotors(active && g_largeFrames > 0 ? g_largeSpeed : 0, active && g_smallFrames > 0 ? 0xFFFF : 0);
+    UpdateMotors();
 }
 
 void Gamepad_Shutdown()
 {
-    g_smallFrames = g_largeFrames = 0;
+    g_smallUntil = g_largeUntil = GetTickCount();
     SetMotors(0, 0);
 }

@@ -30,6 +30,7 @@
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
 static HWND g_gameWindow;  // focus window of the game device
+static int g_devicesHooked;
 void Log(const char* fmt, ...)
 {
     if (!g_log) return;
@@ -568,6 +569,7 @@ static void HookDevice(IDirect3DDevice9* dev, bool isEx)
     HOOK(107, SetPixelShader)
     if (isEx) HOOK(132, ResetEx)
 #undef HOOK
+    g_devicesHooked++;
     Log("device %p hooked (ex=%d)", dev, isEx ? 1 : 0);
 }
 
@@ -601,6 +603,39 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDeviceEx(IDirect3D9Ex* d3d, UINT a, D3
         HookDevice(*out, true);
     }
     return hr;
+}
+
+// Fallback: sometimes CreateDevice of the object GOG's wrapper hands to the game
+// no longer runs through our system vtable hook (slot 16 overwritten after we
+// patched it, or a wrapper object with its own vtable). The object returned to the
+// game is hooked as well; its hook only acts if the system hook did not.
+static CreateDevice_t o_CreateDeviceOuter;
+
+static HRESULT STDMETHODCALLTYPE hk_CreateDeviceOuter(IDirect3D9* d3d, UINT a, D3DDEVTYPE t, HWND w, DWORD f,
+                                                      D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out)
+{
+    int before = g_devicesHooked;
+    HRESULT hr = o_CreateDeviceOuter(d3d, a, t, w, f, pp, out);
+    if (SUCCEEDED(hr) && out && *out && g_devicesHooked == before) {
+        Log("CreateDevice (outer, %ux%u) -> 0x%08lx, system hook was bypassed", pp ? pp->BackBufferWidth : 0,
+            pp ? pp->BackBufferHeight : 0, hr);
+        g_gameWindow = pp && pp->hDeviceWindow ? pp->hDeviceWindow : w;
+        MenuPad_SetWindow(g_gameWindow);
+        ReleaseShadows();
+        g_waterPS = nullptr;
+        HookDevice(*out, false);
+    }
+    return hr;
+}
+
+static void HookOuterD3D(IDirect3D9* d3d)
+{
+    if (!d3d) return;
+    void** vt = *(void***)d3d;
+    if (vt[16] == (void*)hk_CreateDevice || vt[16] == (void*)hk_CreateDeviceOuter) return;
+    void* o = PatchVTable(d3d, 16, (void*)hk_CreateDeviceOuter);
+    if (o) o_CreateDeviceOuter = (CreateDevice_t)o;
+    Log("game IDirect3D9 %p: CreateDevice %p is not our hook, hooked outer vtable %p", d3d, o, vt);
 }
 
 // IDirect3D9 and IDirect3D9Ex may use different vtables, so each class only gets
@@ -646,6 +681,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     Gamepad_Install();
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT))p_Direct3DCreate9)(sdk);
     Log("Direct3DCreate9(%u) -> %p", sdk, d3d);
+    HookOuterD3D(d3d);
     return d3d;
 }
 
