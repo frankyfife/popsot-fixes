@@ -238,3 +238,77 @@ to time at 30 Hz, as the Xbox counts them down per game frame), with strength
 `s/255 × 65535` like the Xbox, honouring the Vibration option and only while the game
 window is in the foreground. Stop calls (0 frames, e.g. when a cutscene starts) are not
 needed because every rumble ends by itself.
+
+## Button prompts
+
+Texts reference buttons with escape codes: `\p5\<c>` (font 5 on the consoles, where
+`<c>` is a button glyph) and `\dN\` (one of 8 script-set strings, table `0x9ec528`,
+32 bytes each). The escape parser `0x43dc80` turns `\p5\<c>` into type 8 and `\d2\`
+into `\p5\M`. The PC text layout (`0x43df90`, width `0x43dea0`) replaces type 8 with
+the string from `0x41a510` (cdecl `char*(char code)`): the name of the key bound to
+the action behind the code (A 0 jump, B 1 cancel, C 2 attack, D 3 dagger, L 6 rewind,
+R 7 special action, l 4 alternate view, r 5 look, M movement), read from the
+`[Keys]`/`[KeysLong]` sections of `pop4pclocal.dat` in `POPData.BF`.
+
+**Fix (`gamepad.cpp`):** while a controller is connected (`[controller] prompts`),
+`0x41a510` returns the controller's button names for our mapping, and the `\dN\`
+getters `0x426f20` / `0x426f00` return `START` for 0 and `RS` for 3 (camera control);
+the other `\dN\` strings are verbs ("Hold", "Press") and stay.
+
+## Cameras
+
+The view matrix is built from the camera matrix by `0x437f70` (cdecl, camera struct),
+several times per frame (main view `0x425db0`, visibility `0x47b3b0`). Camera struct:
+world matrix at `+0x88` – rows I `+0x88`, J `+0x98`, K `+0xa8` (the camera looks along
+−K) – and position `+0xb8`; the inverse (view) matrix follows at `+0xcc`. The main
+view's camera is the display `*(0x9ec518)` + `0xcc`.
+
+GOG's widescreen option (`gog_pop1.dll`) patches `gpp.exe` so that the tangent of the
+field of view is taken with the factor at `0xb2ff00` instead of the constant 0.5
+(`0x4381f3`, `0x45d870`, `0x45d978`, `0x45d995`) and the divisor 2.0 at `0x438688`,
+`0x4386be`, `0x4386ff`, `0x660818`; it keeps the vertical field of view.
+
+**Main menu (`menucam.cpp`):** the front-end scene is world `menu3D`. Loaded worlds
+are merged into a "SuperWorld", so the world is recognised when its `.wow` file is
+parsed: the parser `0x68bc80` (passed as a callback at `0x6780ca` and `0x68c1c2`) is
+wrapped and returns the world, whose name is at `+0x1d8`. While `menu3D` is loaded
+and the camera is at its menu position, `0x437f70` is detoured to move the camera
+back along K and up along the world Z axis; the offset fades out over the first
+8 units when a new game starts the camera flight.
+
+**Free camera:** the same detour writes a free-flying camera (yaw/pitch, position)
+into the main view's camera struct; the signs of the I/J rows are taken from the
+camera when it starts. Game input is withheld by the `GetActionValue` and stick hooks.
+
+## Videos
+
+Videos are Bink 1 (`Video\*.int`, 640×448, cutscenes 640×346, one audio track per
+language selected with `BinkSetSoundTrack`). `0x675140` opens a video (`BinkOpen`
+flags `0x8204000`; a first open with `0x4000` only picks the track, and `0x4137b0`
+opens files without closing them), creates a texture of the video size rounded up
+to a power of two (`CreateTexture`, UV scale in `0xaf44c0` / `0xaf44bc`) and builds a
+pre-transformed quad over the whole back buffer (`0x674d30`, called from `0x675485`
+and `0x674eeb`). `0x674c50` copies each frame (`BinkDoFrame`, `BinkCopyToBuffer`,
+`BinkNextFrame`).
+
+**Fix (`video.cpp`):**
+* `keep_aspect`: the two calls of `0x674d30` are wrapped; the quad is rebuilt at the
+  largest size with the picture's aspect ratio.
+* Replacements: the game's Bink imports (`BinkOpen`, `BinkCopyToBuffer`, `BinkClose`)
+  are hooked. If `<name>.mp4` (or `.mov`, `.mkv`) exists, Bink still plays the
+  original, but the texture is created at the replacement's size (the UV scale is
+  corrected right after), and `BinkCopyToBuffer` copies the replacement frame at the
+  Bink frame's time, decoded with Media Foundation (`IMFSourceReader`, RGB32).
+
+## Sound
+
+The game creates DirectSound through Creative's `EAX.DLL` (`EAXDirectSoundCreate8`),
+which uses `CoCreateInstance(CLSID_DirectSound8)` – always the system `dsound.dll`,
+without hardware 3D or EAX since Windows Vista. The audio options (`0x401c30`,
+`0x401fc0`) only enable EAX when the device reports it (`0x6f4a00`, `+0x168`) and 3D
+audio is on (`0x414070`, `0x414020`).
+
+**Fix (`sound.cpp`):** if `dsound.dll` from DSOAL is in the game folder, `EAX.DLL`'s
+import of `CoCreateInstance` is patched to create DirectSound objects through DSOAL's
+class factory (`DllGetClassObject`), uninitialized like the COM path. DSOAL emulates
+EAX on OpenAL Soft and outputs to the Windows speaker setup.

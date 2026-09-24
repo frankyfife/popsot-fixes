@@ -52,11 +52,42 @@ The PC menus are mouse menus. The controller drives them directly: the highlight
 from element to element, lists (profiles, save games) scroll and are selected with A,
 sliders are changed with left/right.
 
+Tutorial and menu hints name the controller buttons while a controller is connected
+("Use Move [LS] to control the Prince", "A : Select") instead of the keyboard keys.
+
+### Free camera
+Back (View) or F9 detaches the camera: left stick / WASD move, right stick / arrow keys
+look, LT / RT or Q / E move down / up, LB / Ctrl slow down, RB / Shift speed up. The game
+gets no input while the free camera is on (Start still pauses).
+
 ### Vibration
 The PC port removed force feedback completely, although the game still triggers it.
 Vibration is back – hits, landings, earthquakes, machinery – with the same
 strength and duration as on Xbox. It follows the in-game Vibration option and stops
 when the game window loses focus.
+
+### Main menu on wide screens
+The main menu's 3D scene was built for 4:3; on wide screens its edges show. Like the
+PS3 HD version, the menu camera is moved back and up (adjustable, F6 / F7 and
+Shift+F6 / F7 in the main menu). When a new game starts, the camera flies to the
+Prince without a jump.
+
+### Videos
+The videos are shown with their correct aspect ratio instead of stretched. Upscaled
+versions can be added without converting them back to Bink: put `<name>.mp4` next to
+`Video\<name>.int`, and the game shows its picture while the original file still
+provides sound (all languages), timing and skipping. `tools\export_videos.ps1` exports
+the originals as ProRes for an upscaler such as Topaz Video AI. Any size up to
+4096×4096 and any frame rate work; H.264 always, H.265/AV1 with the Windows codec
+extensions.
+
+### EAX and surround sound
+The game's EAX 2 reverb and 3D sound need hardware DirectSound3D, which Windows no
+longer has. With [DSOAL](https://github.com/kcat/dsoal) in the game folder (`dsound.dll`,
+`dsoal-aldrv.dll`, optional `alsoft.ini`), the fix routes the game's sound through it:
+EAX is emulated and output follows the Windows speaker setup (stereo, headphones,
+5.1, 7.1). Turn on *3D Audio* and *EAX* in the game's audio options. DSOAL is not
+included in this project.
 
 ### Level select
 The main menu gets the developer's **Special Load** entry, which is hidden in the PC
@@ -78,6 +109,9 @@ file is the default.
 | `[post] blur_resolution` | `4` | size of the blur targets, 1 = original 512×512, up to 4× |
 | `[post] blur` | `1` | 0 disables the zoom/speed blur |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
+| `[menus] camera_back` / `camera_up` | `3.5` / `6.25` | main-menu camera offset, 0 = original |
+| `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
+| `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 
 ## Requirements
 
@@ -98,7 +132,8 @@ GOG's own compatibility layer keeps working; this DLL forwards everything to it.
 
 **Uninstall:** delete `dx.dll` and rename `dx_gog.dll` back to `dx.dll`.
 
-**F10** toggles the graphics fixes while playing, for comparison.
+**F10** toggles the graphics fixes while playing, for comparison. **F9** toggles the free
+camera.
 Diagnostics (and a crash report, if the game crashes) are written to `popfix.log` in the
 game folder.
 
@@ -111,7 +146,8 @@ Requires the Visual Studio 2022 Build Tools (C++ x86). Run `build.bat`; the resu
 
 See [docs/TECHNICAL.md](docs/TECHNICAL.md) for the reverse-engineering notes:
 how the water and post effects are rendered on Xbox and PC, where the differences are,
-how the menu system handles input, and where the vibration went.
+how the menu system handles input, where the vibration went, and how the button hints,
+cameras, videos and sound are hooked.
 
 ## Credits
 
