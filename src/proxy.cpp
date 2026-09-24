@@ -29,6 +29,7 @@
 #include "gamepad.h"
 #include "menucam.h"
 #include "sound.h"
+#include "video.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -341,6 +342,14 @@ static unsigned BeginDraw(IDirect3DDevice9* dev)
     for (int s = 0; s < 4; s++) {
         IDirect3DBaseTexture9* t = g_boundTex[s];
         if (!t) continue;
+        if (Video_IsReplacementTexture(t)) {  // high-resolution video: filter it
+            if (g_magFilter[s] != D3DTEXF_LINEAR || g_minFilter[s] != D3DTEXF_LINEAR) {
+                o_SetSamplerState(dev, s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+                o_SetSamplerState(dev, s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+                mask |= 1u << s;
+            }
+            continue;
+        }
         UINT w, h;
         if (!RenderTargetTextureSize(t, w, h) || w >= g_curRTWidth) continue;  // not an upscaled buffer
         if (!g_enabled) { CountStat(w, h, STAT_OFF); continue; }
@@ -624,8 +633,10 @@ static HRESULT STDMETHODCALLTYPE hk_CreateTexture(IDirect3DDevice9* dev, UINT w,
         if (k > 1 && g_bigRT == 0) { g_bigRT = 512 * k; InstallQuadHook(); if (g_bigRTMaxFactor < 2) g_bigRT = 0; }
         if (g_bigRT) { w = h = g_bigRT; big = true; }
     }
+    if (!big) Video_AdjustTexture(w, h, usage, fmt);
     HRESULT hr = o_CreateTexture(dev, w, h, levels, usage, fmt, pool, out, sh);
     if (big && SUCCEEDED(hr) && out && *out) g_bigTex[g_numBig++] = *out;
+    if (SUCCEEDED(hr) && out && *out) Video_TextureCreated(*out);
     if (usage & D3DUSAGE_RENDERTARGET)
         Log("game render-target texture %ux%u levels %u fmt %d -> %p (0x%08lx)", w, h, levels, fmt,
             out ? *out : nullptr, hr);
@@ -1031,6 +1042,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             slash[1] = 0;
             strcpy(g_gameDir, path);
             Sound_Install(g_gameDir);
+            Video_Install();
             strcpy(slash + 1, "dx_gog.dll");
         }
         g_gog = LoadLibraryA(path);

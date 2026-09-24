@@ -17,6 +17,7 @@
 #include <windows.h>
 #include <string.h>
 #include "sound.h"
+#include "imports.h"
 
 void Log(const char* fmt, ...);
 
@@ -49,33 +50,6 @@ HRESULT WINAPI CoCreateInstanceHook(REFCLSID clsid, LPUNKNOWN outer, DWORD ctx, 
     return g_coCreateInstance(clsid, outer, ctx, iid, out);
 }
 
-// Replaces the import `name` from `dll` in module `mod` (matched by name, since
-// ole32 forwards CoCreateInstance to combase).
-bool PatchImport(HMODULE mod, const char* dll, const char* name, void* hook)
-{
-    BYTE* base = (BYTE*)mod;
-    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
-    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-    if (!dir.VirtualAddress) return false;
-    for (IMAGE_IMPORT_DESCRIPTOR* imp = (IMAGE_IMPORT_DESCRIPTOR*)(base + dir.VirtualAddress); imp->Name; imp++) {
-        if (_stricmp((const char*)(base + imp->Name), dll) != 0 || !imp->OriginalFirstThunk) continue;
-        IMAGE_THUNK_DATA* names = (IMAGE_THUNK_DATA*)(base + imp->OriginalFirstThunk);
-        IMAGE_THUNK_DATA* funcs = (IMAGE_THUNK_DATA*)(base + imp->FirstThunk);
-        for (; names->u1.AddressOfData; names++, funcs++) {
-            if (IMAGE_SNAP_BY_ORDINAL(names->u1.Ordinal)) continue;
-            IMAGE_IMPORT_BY_NAME* ibn = (IMAGE_IMPORT_BY_NAME*)(base + names->u1.AddressOfData);
-            if (strcmp((const char*)ibn->Name, name) != 0) continue;
-            DWORD prot;
-            VirtualProtect(&funcs->u1.Function, sizeof(void*), PAGE_READWRITE, &prot);
-            g_coCreateInstance = (CoCreateInstance_t)funcs->u1.Function;
-            funcs->u1.Function = (DWORD)hook;
-            VirtualProtect(&funcs->u1.Function, sizeof(void*), prot, &prot);
-            return true;
-        }
-    }
-    return false;
-}
-
 }  // namespace
 
 void Sound_Install(const char* gameDir)
@@ -99,7 +73,7 @@ void Sound_Install(const char* gameDir)
         Log("sound: %s is not usable, EAX stays off", path);
         return;
     }
-    if (PatchImport(eax, "ole32.dll", "CoCreateInstance", (void*)CoCreateInstanceHook))
+    if (PatchImport(eax, "ole32.dll", "CoCreateInstance", (void*)CoCreateInstanceHook, (void**)&g_coCreateInstance))
         Log("sound: EAX.DLL creates DirectSound through DSOAL (%s)", path);
     else
         Log("sound: EAX.DLL import of CoCreateInstance not found");
