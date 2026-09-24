@@ -103,6 +103,8 @@ void __fastcall ElementSetVisible(char* elem, void* /*edx*/, int show)
     }
 }
 
+void UpdateLoadAvailable();  // save files, below
+
 // Xbox menu manager tick, see file comment.
 bool __fastcall XboxMenuTick(char* mgr, void* /*edx*/)
 {
@@ -136,6 +138,7 @@ bool __fastcall XboxMenuTick(char* mgr, void* /*edx*/)
     }
 
     int open = *(int*)(mgr + kOpenPages);
+    if (open) UpdateLoadAvailable();
     if (open) {
         void* top = *(void**)(mgr + kPageStack + open * 4);
         if (*(int*)((char*)top + kPageState) == 4) ClosePage(top);
@@ -264,6 +267,37 @@ int __cdecl SaveGameHook(int slot, int kind, void* data, int size)
     int ok = PcSaveGame(slot, kind, data, size);
     Log("console menu: save game slot %d -> %d", slot, ok);
     return ok;
+}
+
+// "Load game" in the console main menu (script 0x61a600) only opens the load page
+// (0xb004f85) when a script variable is set (object 0xe0001f6, +0xcc, pointer
+// cached by the script at 0xadccb4); otherwise it shows a message whose text only
+// exists on Xbox. On Xbox the storage code sets it; on PC nothing does. We set it
+// while PC save files exist.
+int* const* const g_loadAvailable = (int* const*)0x00adccb4;
+
+void UpdateLoadAvailable()
+{
+    static DWORD lastCheck;
+    static int saves = -1;
+    int* flag = *g_loadAvailable;
+    if (!flag) return;
+    DWORD now = GetTickCount();
+    if (saves < 0 || now - lastCheck > 2000) {
+        lastCheck = now;
+        int n = 0;
+        if (EnsureProfile()) {
+            EnumSaves();
+            n = SaveCount();
+            FreeSaves();
+        }
+        if (n != saves) Log("console menu: %d PC save games available for loading", n);
+        saves = n;
+    }
+    if ((*flag != 0) != (saves > 0)) {
+        Log("console menu: load flag %d -> %d", *flag, saves > 0 ? 1 : 0);
+        *flag = saves > 0 ? 1 : 0;
+    }
 }
 
 int __cdecl LoadGameHook(int slot, void* data, int size)
