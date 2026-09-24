@@ -19,6 +19,7 @@
 #include <windows.h>
 #include <xinput.h>
 #include <stdlib.h>
+#include <string.h>
 #include "menupad.h"
 
 void Log(const char* fmt, ...);
@@ -405,7 +406,73 @@ void Update()
     if (pressed & (XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y)) { Press(mgr, VK_ESCAPE); if ((page = TopPage(mgr))) LogFocus(page, "back"); }
 }
 
+// ---------------------------------------------------------------- level select
+// The PC build still has the level select of the console versions as a page
+// (P_SpecialLoad, index 15: pages of 15 levels, Prev15/Next15, handler 0x40f180),
+// and the main menu still has its "SpecialLoad" button - but the main menu hides
+// it every time it opens (0x4094fb pushes 0 for "shown") and its click handler
+// (0x409180) has no case for it. Show the button and open the page on click.
+const DWORD kSpecialLoadShown = 0x004094fb;  // push 0 -> push 1
+const unsigned char kSpecialLoadShownBytes[] = { 0x6A, 0x00, 0x68, 0xF8, 0x60, 0x7A, 0x00 };
+const DWORD kMainMenuClick = 0x00409180;     // thiscall bool(handler, element)
+const unsigned char kMainMenuClickPrologue[] = { 0x53, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x10 };
+typedef int(__thiscall* Click_t)(void* handler, char* elem);
+typedef void(__thiscall* OpenPcPage_t)(void* pcMenu, int page, char a, int b);
+const OpenPcPage_t OpenPcPage = (OpenPcPage_t)0x00409870;
+Click_t g_mainMenuClick;
+
+int __fastcall MainMenuClick(void* handler, void* /*edx*/, char* elem)
+{
+    if (elem && _stricmp(elem + 4, "SpecialLoad") == 0) {
+        Log("menu pad: level select opened");
+        OpenPcPage(*(void**)0x0080bc44, 15, 0, 1);  // P_SpecialLoad, as "LoadGame" opens P_LoadSavedGame
+        return 1;
+    }
+    return g_mainMenuClick(handler, elem);
+}
+
+void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
+{
+    unsigned char* fn = (unsigned char*)addr;
+    if (memcmp(fn, prologue, len) != 0) return nullptr;
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return nullptr;
+    memcpy(tramp, fn, len);
+    tramp[len] = 0xE9;
+    *(DWORD*)(tramp + len + 1) = (DWORD)(fn + len) - (DWORD)(tramp + len + 5);
+    DWORD prot;
+    VirtualProtect(fn, len, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)hook - (DWORD)(fn + 5);
+    for (size_t i = 5; i < len; i++) fn[i] = 0x90;
+    VirtualProtect(fn, len, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, len);
+    return tramp;
+}
+
 }  // namespace
+
+void MenuPad_Install()
+{
+    static bool done;
+    if (done) return;
+    done = true;
+    if (memcmp((void*)kSpecialLoadShown, kSpecialLoadShownBytes, sizeof(kSpecialLoadShownBytes)) != 0 ||
+        memcmp((void*)kMainMenuClick, kMainMenuClickPrologue, sizeof(kMainMenuClickPrologue)) != 0) {
+        Log("menu pad: unknown executable, level select not enabled");
+        return;
+    }
+    g_mainMenuClick = (Click_t)Detour(kMainMenuClick, kMainMenuClickPrologue, sizeof(kMainMenuClickPrologue),
+                                      (void*)MainMenuClick);
+    if (!g_mainMenuClick) return;
+    DWORD prot;
+    unsigned char* p = (unsigned char*)kSpecialLoadShown;
+    VirtualProtect(p, 2, PAGE_EXECUTE_READWRITE, &prot);
+    p[1] = 1;
+    VirtualProtect(p, 2, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), p, 2);
+    Log("menu pad: level select button enabled in the main menu");
+}
 
 // ---------------------------------------------------------------- public
 void MenuPad_SetWindow(HWND hwnd) { g_hwnd = hwnd; }

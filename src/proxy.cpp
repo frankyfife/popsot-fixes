@@ -693,6 +693,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
+    MenuPad_Install();
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT))p_Direct3DCreate9)(sdk);
     Log("Direct3DCreate9(%u) -> %p", sdk, d3d);
     HookOuterD3D(d3d);
@@ -705,6 +706,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out)
     Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
+    MenuPad_Install();
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, IDirect3D9Ex**))p_Direct3DCreate9Ex)(sdk, out);
     Log("Direct3DCreate9Ex(%u) -> 0x%08lx", sdk, hr);
     return hr;
@@ -716,6 +718,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9On12(UINT sdk, void* args, UI
     Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
+    MenuPad_Install();
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT, void*, UINT))p_Direct3DCreate9On12)(sdk, args, n);
     Log("Direct3DCreate9On12(%u) -> %p", sdk, d3d);
     return d3d;
@@ -727,6 +730,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9On12Ex(UINT sdk, void* args, UINT
     Trace_Install();
     ConsoleMenu_Enable();
     Gamepad_Install();
+    MenuPad_Install();
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, void*, UINT, IDirect3D9Ex**))p_Direct3DCreate9On12Ex)(sdk, args, n, out);
     Log("Direct3DCreate9On12Ex(%u) -> 0x%08lx", sdk, hr);
     return hr;
