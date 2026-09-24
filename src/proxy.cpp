@@ -28,6 +28,7 @@
 #include "consolemenu.h"
 #include "gamepad.h"
 #include "menucam.h"
+#include "sound.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -764,6 +765,7 @@ static const float kXboxZOffset = 3.0f, kXboxZMax = 10.0f;
 static float g_refractScale = 1.5f;
 static float g_menuCamBack = 3.5f;  // [menus] camera_back / camera_up, see menucam.cpp
 static float g_menuCamUp = 6.25f;
+static char g_gameDir[MAX_PATH];  // with trailing backslash
 static bool g_loggedRefract;
 static char g_iniPath[MAX_PATH];
 
@@ -943,6 +945,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9(UINT sdk)
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Sound_Install(g_gameDir);
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT))p_Direct3DCreate9)(sdk);
     Log("Direct3DCreate9(%u) -> %p", sdk, d3d);
     HookOuterD3D(d3d);
@@ -957,6 +960,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9Ex(UINT sdk, IDirect3D9Ex** out)
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Sound_Install(g_gameDir);
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, IDirect3D9Ex**))p_Direct3DCreate9Ex)(sdk, out);
     Log("Direct3DCreate9Ex(%u) -> 0x%08lx", sdk, hr);
     return hr;
@@ -970,6 +974,7 @@ extern "C" IDirect3D9* WINAPI Proxy_Direct3DCreate9On12(UINT sdk, void* args, UI
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Sound_Install(g_gameDir);
     IDirect3D9* d3d = ((IDirect3D9 * (WINAPI*)(UINT, void*, UINT))p_Direct3DCreate9On12)(sdk, args, n);
     Log("Direct3DCreate9On12(%u) -> %p", sdk, d3d);
     return d3d;
@@ -983,6 +988,7 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9On12Ex(UINT sdk, void* args, UINT
     Gamepad_Install();
     MenuPad_Install();
     MenuCam_Install(g_menuCamBack, g_menuCamUp);
+    Sound_Install(g_gameDir);
     HRESULT hr = ((HRESULT(WINAPI*)(UINT, void*, UINT, IDirect3D9Ex**))p_Direct3DCreate9On12Ex)(sdk, args, n, out);
     Log("Direct3DCreate9On12Ex(%u) -> 0x%08lx", sdk, hr);
     return hr;
@@ -1021,7 +1027,12 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
         }
-        if (slash) strcpy(slash + 1, "dx_gog.dll");
+        if (slash) {
+            slash[1] = 0;
+            strcpy(g_gameDir, path);
+            Sound_Install(g_gameDir);
+            strcpy(slash + 1, "dx_gog.dll");
+        }
         g_gog = LoadLibraryA(path);
         if (!g_gog) { Log("failed to load %s (error %lu)", path, GetLastError()); return FALSE; }
 #define RESOLVE(name) p_##name = GetProcAddress(g_gog, #name);
