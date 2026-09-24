@@ -145,6 +145,54 @@ bool __fastcall XboxMenuTick(char* mgr, void* /*edx*/)
     return *(int*)(mgr + kOpenPages) != 0;
 }
 
+// ---------------------------------------------------------------- dialogs
+// Scripts open a console dialog (0x6725c0: page, text, up to three buttons) and
+// poll its answer by id through 0x672420 (cdecl int(int id)); 0 = still open.
+// On Xbox (0x18bd0) the answer comes from the menu manager, where the dialog's
+// buttons store it (0x672550). The PC port added a hook at the end of 0x6725c0
+// (0x402840) that recognises some dialogs by their text and sets a PC mode
+// (*(0x80bc44) + 0xa8):
+//   1  "save game?"  -> opens the mouse page P_SaveConfirmation on top, which
+//                       pauses the game while open; its buttons set the answer
+//   2, 3             -> answered automatically (Xbox storage messages)
+//   0  anything else -> never answered
+// and turned the answer query into a jump to the PC answer (0x4029e0).
+// With the console dialogs working again, the save question is answered on the
+// console dialog itself: the mouse page is not opened, and the query returns the
+// Xbox answer except for the automatically answered PC modes 2 and 3.
+const DWORD kSavePageCall = 0x00402900;  // call 0x409870 (thiscall, 3 args): open P_SaveConfirmation
+const unsigned char kSavePageCallBytes[] = { 0xE8, 0x6B, 0x6F, 0x00, 0x00 };
+const DWORD kDialogAnswer = 0x00672420;
+const unsigned char kDialogAnswerBytes[] = { 0xE9, 0xBB, 0x05, 0xD9, 0xFF };  // jmp 0x4029e0
+typedef int(__cdecl* PcDialogAnswer_t)();
+const PcDialogAnswer_t PcDialogAnswer = (PcDialogAnswer_t)0x004029e0;
+char** const g_pcMenu = (char**)0x0080bc44;
+char** const g_menuManager = (char**)0x00af2414;
+
+int __cdecl DialogAnswer(int id)
+{
+    char* pc = *g_pcMenu;
+    int mode = pc ? *(int*)(pc + 0xa8) : 0;
+    int answer;
+    if (mode == 2 || mode == 3) {
+        answer = PcDialogAnswer();
+    } else if (char* mgr = *g_menuManager) {
+        short sid = (short)id;
+        if (*(short*)(mgr + 0x1a4) == sid) answer = *(int*)(mgr + 0x1a0);
+        else if (*(short*)(mgr + 0x1b4) == sid) answer = *(int*)(mgr + 0x1b0);
+        else answer = *(short*)(mgr + 0x1a4) ? 0x20000 : 0x10000;  // unknown id
+    } else {
+        answer = 0;
+    }
+    static int lastId, lastAnswer = -1;
+    if (id != lastId || answer != lastAnswer) {
+        lastId = id;
+        lastAnswer = answer;
+        Log("console menu: dialog %d (pc mode %d) answer %d", id, mode, answer);
+    }
+    return answer;
+}
+
 bool Patch(DWORD addr, const unsigned char* expect, size_t len, const unsigned char* bytes, size_t n)
 {
     unsigned char* fn = (unsigned char*)addr;
@@ -172,7 +220,9 @@ void ConsoleMenu_Enable()
     if (memcmp((void*)kPcMenuRedirect, kPcMenuRedirectPrologue, sizeof(kPcMenuRedirectPrologue)) != 0 ||
         memcmp((void*)kMenuTick, kMenuTickPrologue, sizeof(kMenuTickPrologue)) != 0 ||
         memcmp((void*)kPadClearBranch, kPadClearBranchBytes, sizeof(kPadClearBranchBytes)) != 0 ||
-        memcmp((void*)kElemSetVisible, kElemSetVisiblePrologue, sizeof(kElemSetVisiblePrologue)) != 0) {
+        memcmp((void*)kElemSetVisible, kElemSetVisiblePrologue, sizeof(kElemSetVisiblePrologue)) != 0 ||
+        memcmp((void*)kSavePageCall, kSavePageCallBytes, sizeof(kSavePageCallBytes)) != 0 ||
+        memcmp((void*)kDialogAnswer, kDialogAnswerBytes, sizeof(kDialogAnswerBytes)) != 0) {
         Log("console menu: unknown executable, not enabled");
         return;
     }
@@ -190,5 +240,12 @@ void ConsoleMenu_Enable()
     const unsigned char jmpShort = 0xEB;
     Patch(kPadClearBranch, kPadClearBranchBytes, sizeof(kPadClearBranchBytes), &jmpShort, 1);
 
-    Log("console menu: enabled (PC redirect removed, Xbox menu tick restored, pad input kept, element show restored)");
+    const unsigned char dropArgs[] = { 0x83, 0xC4, 0x0C, 0x90, 0x90 };  // add esp, 12 (callee-cleaned args)
+    Patch(kSavePageCall, kSavePageCallBytes, sizeof(kSavePageCallBytes), dropArgs, sizeof(dropArgs));
+
+    *(DWORD*)(jmp + 1) = (DWORD)DialogAnswer - (kDialogAnswer + 5);
+    Patch(kDialogAnswer, kDialogAnswerBytes, sizeof(kDialogAnswerBytes), jmp, sizeof(jmp));
+
+    Log("console menu: enabled (PC redirect removed, Xbox menu tick restored, pad input kept, element show restored, "
+        "console save dialog)");
 }

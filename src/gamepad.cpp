@@ -147,17 +147,29 @@ void __cdecl GetStickHook(int pad, float* out, int stick)
 }
 
 // ---------------------------------------------------------------- vibration
-// The PC port removed force feedback: the AI script functions that rumble the pad
-// still exist and still pop their arguments, but call an empty function (0x563530,
-// shared by ~1000 stripped call sites). We redirect only their calls:
-//   id 0x1b63 small motor (0x498867, 0x49887f): cdecl (pad, frames)
-//   id 0x1b64 large motor (0x49892e):           cdecl (pad, strength 0..255, frames)
-// Like on Xbox (0x2dff20 / 0x2dff70, motors driven in 0xdc6a0 / 0xdc700) a motor runs
-// for the given number of game frames; pad must be 0. The menu option "Vibration"
-// still works on PC and stores its state at 0x7f157c.
+// The PC port removed force feedback: the script code that rumbles the pad still
+// evaluates its arguments, but calls an empty function (0x563530, shared by ~1000
+// stripped call sites) instead of the motor driver. We redirect only those calls:
+//   small motor: cdecl (pad, frames)
+//   large motor: cdecl (pad, strength 0..255, frames)
+// Like on Xbox (motors driven in 0xdc6a0 / 0xdc700, counted down in 0xdc160) a motor
+// runs for the given number of game frames; pad must be 0. The menu option
+// "Vibration" still works on PC and stores its state at 0x7f157c.
+//
+// Call sites, found by matching the Xbox callers of 0xdc6a0 / 0xdc700 to the PC
+// through the AI function table ids:
+//   0x558f10 (Xbox 0x18e510)  the Prince's per-frame rumble: script variables +0x30
+//                             (small) and +0x74 (large strength) collected during the
+//                             frame, applied for 2 frames - hits, landings, etc.
+//   0x5e7fb0 (Xbox 0x20c730)  rumble generator objects (quakes, machinery), with
+//   0x578420 (Xbox 0x12e000)  their start and stop helpers
+//   0x5789a0 (Xbox 0x12e5d0)
+//   0x498800 / 0x498890       generic script functions (ids 0x1b63 / 0x1b64)
+// Stop calls (frames 0, e.g. entering cutscenes) are not redirected: every rumble
+// here ends by itself after a few frames.
 const DWORD kEmptyFunction = 0x00563530;
-const DWORD kSmallMotorCalls[] = { 0x00498867, 0x0049887f };
-const DWORD kLargeMotorCall = 0x0049892e;
+const DWORD kSmallMotorCalls[] = { 0x00558f84, 0x00578489, 0x00578a6a, 0x00498867, 0x0049887f };
+const DWORD kLargeMotorCalls[] = { 0x00558fd3, 0x005e8193, 0x00578473, 0x00578a14, 0x0049892e };
 const int* const g_vibrationEnabled = (const int*)0x007f157c;
 
 typedef DWORD(WINAPI* XInputSetState_t)(DWORD, XINPUT_VIBRATION*);
@@ -195,19 +207,22 @@ void SetMotors(WORD left, WORD right)
     }
 }
 
-bool RedirectCall(DWORD site, void* target)
+bool IsEmptyCall(DWORD site)
+{
+    const unsigned char* p = (const unsigned char*)site;
+    if (p[0] == 0xE8 && site + 5 + *(const int*)(p + 1) == kEmptyFunction) return true;
+    Log("gamepad: unexpected call at %08lx, vibration not installed", site);
+    return false;
+}
+
+void RedirectCall(DWORD site, void* target)
 {
     unsigned char* p = (unsigned char*)site;
-    if (p[0] != 0xE8 || site + 5 + *(int*)(p + 1) != kEmptyFunction) {
-        Log("gamepad: unexpected call at %08lx, vibration not installed", site);
-        return false;
-    }
     DWORD prot;
     VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &prot);
     *(DWORD*)(p + 1) = (DWORD)target - (site + 5);
     VirtualProtect(p, 5, prot, &prot);
     FlushInstructionCache(GetCurrentProcess(), p, 5);
-    return true;
 }
 
 // Inline detour: relocate `len` whole prologue bytes into a trampoline.
@@ -259,12 +274,14 @@ void Gamepad_Install()
     if (!g_original || !g_originalGetStick) return;
     Log("gamepad: installed (Xbox controller mapping on all game actions)");
 
+    // Check every site first so vibration is either fully installed or not at all.
     bool vibration = g_xinputSetState != nullptr;
-    for (DWORD site : kSmallMotorCalls)
-        vibration = vibration && ((unsigned char*)site)[0] == 0xE8;
-    if (vibration && RedirectCall(kSmallMotorCalls[0], (void*)SmallMotor) &&
-        RedirectCall(kSmallMotorCalls[1], (void*)SmallMotor) && RedirectCall(kLargeMotorCall, (void*)LargeMotor))
-        Log("gamepad: vibration installed");
+    for (DWORD site : kSmallMotorCalls) vibration = vibration && IsEmptyCall(site);
+    for (DWORD site : kLargeMotorCalls) vibration = vibration && IsEmptyCall(site);
+    if (!vibration) return;
+    for (DWORD site : kSmallMotorCalls) RedirectCall(site, (void*)SmallMotor);
+    for (DWORD site : kLargeMotorCalls) RedirectCall(site, (void*)LargeMotor);
+    Log("gamepad: vibration installed");
 }
 
 void Gamepad_OnFrame(HWND gameWindow)

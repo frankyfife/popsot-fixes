@@ -41,6 +41,40 @@ void Log(const char* fmt, ...)
     fflush(g_log);
 }
 
+// ---------------------------------------------------------------- crash log
+// The game only notes "Last execution crashed" in POP.LOG. Log fatal exceptions
+// with registers and the game-code return addresses found on the stack.
+static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* ep)
+{
+    DWORD code = ep->ExceptionRecord->ExceptionCode;
+    if (code != EXCEPTION_ACCESS_VIOLATION && code != EXCEPTION_ILLEGAL_INSTRUCTION &&
+        code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
+        code != EXCEPTION_PRIV_INSTRUCTION)
+        return EXCEPTION_CONTINUE_SEARCH;
+    static LONG logged;
+    if (InterlockedIncrement(&logged) > 8) return EXCEPTION_CONTINUE_SEARCH;  // first-chance, may be handled
+    CONTEXT* c = ep->ContextRecord;
+    HMODULE mod = nullptr;
+    char name[MAX_PATH] = "?";
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)c->Eip, &mod))
+        GetModuleFileNameA(mod, name, MAX_PATH);
+    Log("CRASH: exception %08lx at %08lx (%s + %lx), access %lu %08lx", code, c->Eip, name,
+        c->Eip - (DWORD)mod, (DWORD)ep->ExceptionRecord->ExceptionInformation[0],
+        (DWORD)ep->ExceptionRecord->ExceptionInformation[1]);
+    Log("  eax %08lx ebx %08lx ecx %08lx edx %08lx esi %08lx edi %08lx ebp %08lx esp %08lx", c->Eax, c->Ebx,
+        c->Ecx, c->Edx, c->Esi, c->Edi, c->Ebp, c->Esp);
+    DWORD* sp = (DWORD*)c->Esp;
+    int found = 0;
+    for (int i = 0; i < 1024 && found < 24; i++) {
+        MEMORY_BASIC_INFORMATION mbi;
+        if (!VirtualQuery(sp + i, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT) break;
+        DWORD v = sp[i];
+        if (v >= 0x401000 && v < 0x7a0000) { Log("  stack+%03x: %08lx", i * 4, v); found++; }
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
 // ---------------------------------------------------------------- real d3d9 + export stubs
 static HMODULE g_gog;  // GOG's wrapper (dx_gog.dll)
 static HMODULE g_sys;  // system d3d9.dll
@@ -662,6 +696,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         GetLocalTime(&t);
         Log("\n=== PoP water fix (dx.dll) loaded, pid %lu, %02d:%02d:%02d ===",
             GetCurrentProcessId(), t.wHour, t.wMinute, t.wSecond);
+        AddVectoredExceptionHandler(0, CrashLogger);
 
         if (slash) strcpy(slash + 1, "dx_gog.dll");
         g_gog = LoadLibraryA(path);
