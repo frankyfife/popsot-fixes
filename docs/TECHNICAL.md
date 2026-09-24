@@ -86,6 +86,23 @@ The water pass only runs when the video option *Water* is on (config struct
 (`+0xf0` bits 0/1, filled from `D3DCAPS9` in `0x662e60`). Otherwise a flat fallback
 mesh is drawn.
 
+## Motion blur
+
+The zoom/speed blur (render method `0x670710`, effect vtable `0x7b18e4`) copies the back
+buffer into 512×512 `A8R8G8B8` render targets (`StretchRect`), blurs half of that area
+with the blur pass `0x66b540` and composites the result over the screen. The blur pass
+(thiscall `dst, dstW, dstH, src, srcW, srcH, kernel, taps, ?, uExtent, vExtent`) draws
+a quad of `dstW × dstH` pixels through the quad helper `0x66b300` (`x0, y0, x1, y1` in
+target pixels); `uExtent` / `vExtent` are the texture-space fractions it samples, and
+the tap step is `extent / srcSize`.
+
+**Fix (`proxy.cpp`):** those render targets are created at up to 4× their size
+(`[post] blur_resolution`, limited by the back-buffer height). Pixel sizes that refer to
+an enlarged target are scaled to match – `StretchRect` rectangles, the quad helper's
+coordinates and the blur pass's destination size – while the texture-space extents stay
+unchanged, so the blur keeps its radius and only gains resolution. `[post] blur=0`
+turns the render method into a `ret`.
+
 ## Menus and input
 
 Gameplay input is `InputManagerPC` (`0x41f620`): DirectInput 8 keyboard, mouse and game
@@ -111,12 +128,29 @@ flag bit 3 of the byte at `+100`, visibility check `0x711e40`.
 scroll arrows at `+0x64` / `+0x74` (present if `+0x14` / `+0x20` are set). Row hit test
 `0x714e70`; a list is recognised by its mouse-up handler `0x7150c0` in vtable slot `0x24`.
 
-**Menu pad (`menupad.cpp`):** reads XInput, builds navigation targets (interactive
-elements, list rows found by probing the list's hit test, scroll arrows), moves the
-UI cursor to the selected target (which triggers the normal hover highlight) and
-clicks via the UI manager's own mouse entry points. Function prologues are verified
-before use. *(Superseded by the console menus below; the mouse pages are no longer
-shown when those are enabled.)*
+The UI manager also has key entry points, `0x7124c0` key down and `0x7124e0` key up
+(thiscall, argument `{vk, char}`), which the keyboard path above uses. Pages route keys
+to the focused element's widget (vtable `+0x18` down, `+0x1c` up); lists (vtable
+`0x7b7ce0`) move their current row with the arrow keys, sliders (`0x7b7d90`) change
+their value. After every key event the page gives focus to the element with focus flag
+bit 3 (`0x716c50`), and the hover highlight follows the UI cursor (manager `+0x1a`).
+Element: shown byte `+0x24`, enabled flag bit 1 of `+100`, focus / unfocus in vtable
+slots 3 / 4, neighbour links from `+0x54` (all empty in the PC page data).
+
+**Menu pad (`menupad.cpp`):** reads XInput and feeds the page through the key entry
+points: D-pad / left stick = arrow keys (with key repeat), A = Enter, B / Y = Escape.
+Because the PC pages have no neighbour links, arrow keys that the focused widget does
+not use (it changed neither focus nor row) are resolved spatially: the nearest shown,
+enabled, interactive element in that direction (by widget rect) gets the focus. The UI
+cursor is then moved onto a point of that element that the page's own hit test
+(`0x716d90`) confirms, so the normal hover highlight follows. On a list, A double-clicks
+the current row (found with the row hit test `0x714e70`, scrolling via `+0x80` if
+needed), because the profile and save lists select on double click.
+
+**Level select:** the PC main menu still contains the developer page `P_SpecialLoad`
+(page 15, a list of every level), but the button is created hidden (`push 0` at
+`0x4094fb`) and the click handler (`0x409180`) has no case for it. The patch shows the
+button and opens the page through the PC page opener `0x409870`.
 
 ## Console (Xbox) menus
 
@@ -125,7 +159,8 @@ to C, build pages of fading text, button hints and 3D objects, driven by the eng
 menu manager (PC `*(0xaf2414)`, Xbox `*(0x7584f0)`, same layout on both). Comparing
 the two executables function by function shows the page class (PC vtables `0x7b1fdc` /
 `0x7b1ff4`, Xbox `0x41f4f8`) and all its logic are unchanged. The port disabled the
-console menus in four places:
+console menus in four places (restored only with `[menus] console=1`; saving and loading
+from the console pages is still incomplete):
 
 | # | PC change | Xbox original | Fix (`consolemenu.cpp`) |
 |---|---|---|---|
@@ -185,10 +220,21 @@ through the AI function table, whose ids match between the builds:
 | `0x1b64` | `0x2dff70` | `0x498890` | pad, strength, frames (large motor) |
 | `0x1b68` | `0x2e0070` | `0x4989c0` | enabled (option; PC stores it at `0x7f157c`) |
 
-On PC the first two pop their arguments and then call `0x563530`, a bare `ret` that
-the compiler shares between ~1000 stripped call sites. **Fix (`gamepad.cpp`):** the
-three call sites (`0x498867`, `0x49887f`, `0x49892e`) are redirected to functions that
-run the XInput motors for the given number of frames (strength `s/255 × 65535`, like
-Xbox), honouring the option and only while the game window is in the foreground.
-Stopping calls that the Xbox build inlines elsewhere (cutscenes, pause) are not needed
-because every rumble has a duration.
+On PC these functions and the engine code that drives rumble pop their arguments
+and then call `0x563530`, a bare `ret` that the compiler shares between ~1000 stripped
+call sites. **Fix (`gamepad.cpp`):** only the motor calls are redirected, after checking
+that each one still calls the empty function:
+
+| PC function | Xbox | Rumble | Small motor call | Large motor call |
+|---|---|---|---|---|
+| `0x558f10` | `0x18e510` | the Prince (hits, landings, …) | `0x558f84` | `0x558fd3` |
+| `0x5e7fb0` | `0x20c730` | rumble generators (quakes, machinery) | – | `0x5e8193` |
+| `0x578420` | `0x12e000` | generator start / stop | `0x578489` | `0x578473` |
+| `0x5789a0` | `0x12e5d0` | generator start / stop | `0x578a6a` | `0x578a14` |
+| `0x498800` / `0x498890` | `0x2dff20` / `0x2dff70` | script functions | `0x498867`, `0x49887f` | `0x49892e` |
+
+The replacements run the XInput motors for the given number of game frames (converted
+to time at 30 Hz, as the Xbox counts them down per game frame), with strength
+`s/255 × 65535` like the Xbox, honouring the Vibration option and only while the game
+window is in the foreground. Stop calls (0 frames, e.g. when a cutscene starts) are not
+needed because every rumble ends by itself.
