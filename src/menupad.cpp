@@ -58,11 +58,12 @@ typedef void(__thiscall* MgrMouseButton_t)(void* mgr, const DWORD* event);  // {
 const MgrMouseButton_t MgrDoubleClick = (MgrMouseButton_t)0x00712560;
 DWORD g_cursorSet = 0xFFFFFFFF;  // last cursor position we set (mouse untouched while equal)
 
-// Visible, enabled and of a focusable widget type (types as in 0x711e40).
+// Shown (+0x24, cleared by the pages to hide an element, see 0x4032e0), enabled
+// (+100 bit 1) and of a focusable widget type (types as in 0x711e40).
 bool Focusable(char* elem)
 {
     char* w = elem ? *(char**)(elem + 0x2c) : nullptr;
-    if (!w || !(elem[100] & 2)) return false;
+    if (!w || !elem[0x24] || !(elem[100] & 2)) return false;
     int type = ((WidgetType_t)(*(DWORD**)w)[3])(w);
     return type == 1 || type == 2 || type == 3 || type == 7 || type == 8 || type == 10;
 }
@@ -292,8 +293,8 @@ void DumpPage(char* page)
         DWORD wvt = w ? *(DWORD*)w : 0;
         typedef int(__thiscall* Type_t)(void*);
         int type = w ? ((Type_t)(*(DWORD**)w)[3])(w) : -1;
-        Log("  [%d] %p \"%.24s\" elem vt %08lx flags %02x | widget %p vt %08lx type %d +54 %02x +60 %02x | nb %p %p %p %p",
-            i, e, e + 4, *(DWORD*)e, (unsigned char)e[100], w, wvt, type, w ? (unsigned char)w[0x54] : 0,
+        Log("  [%d] %p \"%.24s\" elem vt %08lx shown %d flags %02x | widget %p vt %08lx type %d +54 %02x +60 %02x | nb %p %p %p %p",
+            i, e, e + 4, *(DWORD*)e, e[0x24], (unsigned char)e[100], w, wvt, type, w ? (unsigned char)w[0x54] : 0,
             w ? (unsigned char)w[0x60] : 0, *(void**)(e + 0x54), *(void**)(e + 0x58), *(void**)(e + 0x5c),
             *(void**)(e + 0x60));
     }
