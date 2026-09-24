@@ -18,7 +18,9 @@
 // by 0x68bc80 (cdecl world*(data)), passed as a load callback at 0x6780ca and
 // 0x68c1c2. It returns the new world, whose name (char[60]) is at +0x1d8. The
 // current world *(0xaf5650) is not usable for this: loaded worlds are merged
-// into a "SuperWorld".
+// into a "SuperWorld", and other worlds (Prince, CameraAndGlobal, ...) are
+// loaded after it. The menu camera (Camera02 of menu3D) is static, so the offset
+// applies while menu3D has been loaded and the camera is at its position.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -35,12 +37,13 @@ const DWORD kParseWorld = 0x0068bc80;
 const DWORD kParseWorldPushes[] = { 0x006780c9, 0x0068c1c1 };  // push 0x68bc80
 const DWORD kWorldName = 0x1d8;
 const char kMenuWorld[] = "menu3D";
+const float kMenuCamPos[3] = { -83.59f, 1.39f, -2.66f };  // Camera02 in menu3D
 
 typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
 
 float g_back = 0.0f;  // [menus] camera_back
 bool g_installed;
-bool g_inMenu;
+bool g_menuLoaded;  // menu3D has been loaded
 bool g_haveOut;
 float g_base[3], g_out[3];
 
@@ -54,15 +57,22 @@ BYTE* __cdecl ParseWorldHook(void* data)
             char name[61];
             memcpy(name, world + kWorldName, 60);
             name[60] = 0;
-            g_inMenu = _stricmp(name, kMenuWorld) == 0;
-            Log("menu camera: world \"%s\" loaded%s", name, g_inMenu ? " (main menu)" : "");
+            bool menu = _stricmp(name, kMenuWorld) == 0;
+            if (menu) g_menuLoaded = true;
+            Log("menu camera: world \"%s\" loaded%s", name, menu ? " (main menu)" : "");
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
     return world;
 }
 
-bool IsMenuWorld() { return g_inMenu; }
+bool IsMenuCamera(const float* pos)
+{
+    if (!g_menuLoaded) return false;
+    float d2 = 0.0f;
+    for (int i = 0; i < 3; i++) d2 += (pos[i] - kMenuCamPos[i]) * (pos[i] - kMenuCamPos[i]);
+    return d2 < 1.0f;
+}
 
 void __cdecl ViewFromCameraHook(BYTE* cam)
 {
@@ -75,9 +85,9 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         if (GetTickCount() - lastLog > 5000) {
             lastLog = GetTickCount();
             Log("menu camera: cam %p pos %.2f %.2f %.2f dir %.2f %.2f %.2f menu %d", cam, g_base[0], g_base[1],
-                g_base[2], k[0], k[1], k[2], g_inMenu);
+                g_base[2], k[0], k[1], k[2], IsMenuCamera(g_base));
         }
-        if (IsMenuWorld() && g_back != 0.0f) {
+        if (IsMenuCamera(g_base) && g_back != 0.0f) {
             for (int i = 0; i < 3; i++) pos[i] = g_base[i] - g_back * k[i];
             memcpy(g_out, pos, sizeof(g_out));
             g_haveOut = true;
@@ -124,8 +134,8 @@ void MenuCam_OnPresent(bool keys)
     if (!g_installed || !keys) return;
     // F6 / F7 move the menu camera closer / further while tuning.
     float step = 0.0f;
-    if (GetAsyncKeyState(VK_F6) & 1) step = -0.25f;
-    if (GetAsyncKeyState(VK_F7) & 1) step = 0.25f;
+    if (GetAsyncKeyState(VK_F6) & 1) step = -0.5f;
+    if (GetAsyncKeyState(VK_F7) & 1) step = 0.5f;
     if (step != 0.0f) {
         g_back += step;
         Log("menu camera: camera_back %.2f", g_back);
