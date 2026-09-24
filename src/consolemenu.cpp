@@ -349,6 +349,31 @@ const unsigned short* const g_progress = (const unsigned short*)0x007a969a;  // 
 typedef int(__fastcall* GameLanguage_t)(void* settings);
 const GameLanguage_t GameLanguage = (GameLanguage_t)0x00418120;  // 0 en, 1 fr, 2 de, 3 es, 4 it
 
+// Only touch a page whose text list is intact: a head node whose ring closes
+// after exactly "count" entries, all readable.
+bool PageListValid(char* page)
+{
+    __try {
+        DWORD vt = *(DWORD*)page;
+        DWORD* head = *(DWORD**)(page + 0xac);
+        int count = *(int*)(page + 0xb0);
+        bool ok = head && count >= 0 && count < 1000;
+        DWORD* node = head;
+        for (int i = 0; ok && i <= count; i++) {
+            DWORD* next = (DWORD*)node[0];
+            if (!next || (DWORD*)next[1] != node) ok = false;
+            node = next;
+        }
+        ok = ok && node == head;
+        Log("console menu: save page %p vtable %08lx list head %p count %d -> %s", page, vt, head, count,
+            ok ? "ok" : "not a text list, left alone");
+        return ok;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        Log("console menu: save page %p unreadable, left alone", page);
+        return false;
+    }
+}
+
 void AddListEntry(char* page, const char* text)
 {
     DWORD* head = *(DWORD**)(page + 0xac);
@@ -412,7 +437,8 @@ void __cdecl SavePageOpen(int pageIndex, int a, int b)
 {
     char* mgr = *g_menuManager;
     char* page = mgr ? *(char**)(*(char**)(mgr + 4) + pageIndex * 4) : nullptr;
-    if (page && *(DWORD**)(page + 0xac)) {
+    if (page && !PageListValid(page)) page = nullptr;
+    if (page) {
         static char texts[64][160];  // the list keeps pointers to these
         PageListReset(page);
         int n = 0;

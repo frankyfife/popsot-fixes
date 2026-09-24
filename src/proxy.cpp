@@ -52,6 +52,15 @@ static LONG CALLBACK CrashLogger(EXCEPTION_POINTERS* ep)
         code != EXCEPTION_INT_DIVIDE_BY_ZERO && code != EXCEPTION_STACK_OVERFLOW &&
         code != EXCEPTION_PRIV_INSTRUCTION)
         return EXCEPTION_CONTINUE_SEARCH;
+    // Our own diagnostics read game memory inside __try; those faults are expected.
+    static HMODULE self;
+    if (!self)
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)CrashLogger, &self);
+    HMODULE at = nullptr;
+    if (GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                           (LPCSTR)ep->ContextRecord->Eip, &at) && at == self)
+        return EXCEPTION_CONTINUE_SEARCH;
     static LONG logged;
     if (InterlockedIncrement(&logged) > 8) return EXCEPTION_CONTINUE_SEARCH;  // first-chance, may be handled
     CONTEXT* c = ep->ContextRecord;
