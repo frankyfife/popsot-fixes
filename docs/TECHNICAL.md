@@ -259,8 +259,8 @@ the other `\dN\` strings are verbs ("Hold", "Press") and stay.
 
 The view matrix is built from the camera matrix by `0x437f70` (cdecl, camera struct),
 several times per frame (main view `0x425db0`, visibility `0x47b3b0`). Camera struct:
-world matrix at `+0x88` – rows I `+0x88`, J `+0x98`, K `+0xa8` (the camera looks along
-−K) – and position `+0xb8`; the inverse (view) matrix follows at `+0xcc`. The main
+world matrix at `+0x88` – rows I `+0x88`, J `+0x98`, K `+0xa8` (the viewing
+direction) – and position `+0xb8`; the inverse (view) matrix follows at `+0xcc`. The main
 view's camera is the display `*(0x9ec518)` + `0xcc`.
 
 GOG's widescreen option (`gog_pop1.dll`) patches `gpp.exe` so that the tangent of the
@@ -273,12 +273,14 @@ are merged into a "SuperWorld", so the world is recognised when its `.wow` file 
 parsed: the parser `0x68bc80` (passed as a callback at `0x6780ca` and `0x68c1c2`) is
 wrapped and returns the world, whose name is at `+0x1d8`. While `menu3D` is loaded
 and the camera is at its menu position, `0x437f70` is detoured to move the camera
-back along K and up along the world Z axis; the offset fades out over the first
+forward along K and up along the world Z axis; the offset fades out over the first
 8 units when a new game starts the camera flight.
 
 **Free camera:** the same detour writes a free-flying camera (yaw/pitch, position)
 into the main view's camera struct; the signs of the I/J rows are taken from the
 camera when it starts. Game input is withheld by the `GetActionValue` and stick hooks.
+Y / P sets the main loop's pause flag `0xaf4498` (`0x67ad90` then only renders), which
+freezes the world while the camera keeps moving.
 
 ## Videos
 

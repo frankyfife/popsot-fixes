@@ -3,15 +3,15 @@
 // The front end renders a 3D scene (world "menu3D", a jungle set) that was built
 // for a 4:3 view. With a wider view (GOG's widescreen option keeps the vertical
 // field of view and widens the horizontal one) the set runs out at the left and
-// right edges. The PS3 HD version solves this by placing the menu camera further
-// back; we do the same.
+// right edges. The PS3 HD version moves the menu camera; we move it too, forward
+// (past the foreground plants) and up, by an amount tuned by eye.
 //
 // The view matrix is built from the camera matrix by 0x437f70, several times per
 // frame (main view 0x425db0, visibility 0x47b3b0, ...). The camera struct (display +0xcc)
 // holds the camera's world matrix at +0x88: rows I (+0x88), J (+0x98),
-// K (+0xa8, pointing backwards: the camera looks along -K) and the position at
-// +0xb8. We detour 0x437f70 and, in the main menu, move the position back along
-// K and up along the world Z axis first.
+// K (+0xa8, the viewing direction) and the position at +0xb8. We detour
+// 0x437f70 and, in the main menu, move the position along K and up along the
+// world Z axis first.
 // The engine rewrites the camera matrix every frame; if it did not, the stored
 // base position is reused so the offset never accumulates.
 //
@@ -30,6 +30,8 @@
 // toggles it; the game gets no input meanwhile (Start still pauses).
 //   left stick / WASD    move       right stick / arrow keys  look
 //   LT / RT, Q / E       down / up  LB / RB, Ctrl / Shift     slow / fast (held)
+//   Y / P                freeze the world (the main loop's pause flag 0xaf4498,
+//                        which also pauses the game behind the pause menu)
 // The sign conventions of the I/J rows are taken from the camera when the free
 // camera starts, so the view does not flip whatever handedness the engine uses.
 
@@ -56,7 +58,7 @@ const float kFadeDistance = 8.0f;
 typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
 ViewFromCamera_t g_viewFromCamera;  // trampoline
 
-float g_back = 0.0f;  // [menus] camera_back
+float g_forward = 0.0f;  // [menus] camera_forward
 float g_up = 0.0f;    // [menus] camera_up
 bool g_installed;
 bool g_menuLoaded;  // menu3D has been loaded
@@ -66,6 +68,7 @@ float g_base[3], g_out[3];
 
 // Free camera state.
 const DWORD kCurrentDisplay = 0x009ec518;  // display being rendered (set by 0x425db0)
+DWORD* const g_pauseFlag = (DWORD*)0x00af4498;
 struct FreeCam {
     bool active;
     BYTE* cam;       // main camera struct it replaces
@@ -73,6 +76,8 @@ struct FreeCam {
     float yaw, pitch;  // radians; forward = (cos p cos y, cos p sin y, sin p)
     float signI, signJ;
     LARGE_INTEGER last;
+    bool frozen;       // we set the pause flag
+    bool freezeDown;   // Y / P held last frame
 } g_free;
 
 void Cross(const float* a, const float* b, float* r)
@@ -116,7 +121,7 @@ void StartFreeCam()
         const float* I = (const float*)(cam + 0x88);
         const float* J = (const float*)(cam + 0x98);
         const float* K = (const float*)(cam + 0xa8);
-        float f[3] = { -K[0], -K[1], -K[2] };
+        float f[3] = { K[0], K[1], K[2] };
         Normalize(f);
         g_free.yaw = atan2f(f[1], f[0]);
         g_free.pitch = asinf(f[2] < -1.0f ? -1.0f : f[2] > 1.0f ? 1.0f : f[2]);
@@ -135,8 +140,18 @@ void StartFreeCam()
     }
 }
 
+void SetFrozen(bool on)
+{
+    if (on == g_free.frozen) return;
+    if (on && *g_pauseFlag) return;  // the game is paused already
+    *g_pauseFlag = on ? 1 : 0;
+    g_free.frozen = on;
+    Log("free camera: world %s", on ? "frozen" : "running");
+}
+
 void StopFreeCam()
 {
+    SetFrozen(false);
     g_free.active = false;
     Gamepad_BlockGame(false);
     Log("free camera: off");
@@ -161,6 +176,9 @@ void UpdateFreeCam()
     XINPUT_GAMEPAD pad;
     if (!Gamepad_Read(&pad)) memset(&pad, 0, sizeof(pad));
     auto key = [](int vk) { return GetAsyncKeyState(vk) < 0 ? 1.0f : 0.0f; };
+    bool freeze = (pad.wButtons & XINPUT_GAMEPAD_Y) || key('P') > 0;
+    if (freeze && !g_free.freezeDown) SetFrozen(!g_free.frozen);
+    g_free.freezeDown = freeze;
     float speed = 6.0f;  // world units per second
     if ((pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) || key(VK_SHIFT)) speed *= 4.0f;
     if ((pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) || key(VK_CONTROL)) speed *= 0.25f;
@@ -191,7 +209,7 @@ void ApplyFreeCam(BYTE* cam)
     for (int i = 0; i < 3; i++) {
         I[i] = g_free.signI * r[i];
         J[i] = g_free.signJ * u[i];
-        K[i] = -f[i];
+        K[i] = f[i];
     }
     memcpy(cam + 0xb8, g_free.pos, sizeof(g_free.pos));
 }
@@ -263,8 +281,8 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         float base[3];
         memcpy(base, ours ? g_base : pos, sizeof(base));
         float w = MenuCameraWeight(base);
-        if (w > 0.0f && (g_back != 0.0f || g_up != 0.0f)) {
-            for (int i = 0; i < 3; i++) pos[i] = base[i] + w * g_back * k[i];
+        if (w > 0.0f && (g_forward != 0.0f || g_up != 0.0f)) {
+            for (int i = 0; i < 3; i++) pos[i] = base[i] + w * g_forward * k[i];
             pos[2] += w * g_up;
             g_cam = cam;
             memcpy(g_base, base, sizeof(g_base));
@@ -281,10 +299,10 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
 
 }  // namespace
 
-void MenuCam_Install(float back, float up)
+void MenuCam_Install(float forward, float up)
 {
     if (g_installed) return;
-    g_back = back;
+    g_forward = forward;
     g_up = up;
     bool known = memcmp((void*)kViewFromCamera, kViewFromCameraPrologue, sizeof(kViewFromCameraPrologue)) == 0;
     for (DWORD push : kParseWorldPushes)
@@ -303,7 +321,7 @@ void MenuCam_Install(float back, float up)
         VirtualProtect((void*)(push + 1), 4, prot, &prot);
     }
     g_installed = true;
-    Log("menu camera: enabled, camera_back %.2f camera_up %.2f", g_back, g_up);
+    Log("menu camera: enabled, camera_forward %.2f camera_up %.2f", g_forward, g_up);
 }
 
 void MenuCam_OnPresent(bool keys)
@@ -327,6 +345,6 @@ void MenuCam_OnPresent(bool keys)
     if (GetAsyncKeyState(VK_F7) & 1) dir = 1;
     if (!dir) return;
     if (GetAsyncKeyState(VK_SHIFT) < 0) g_up += dir * 0.25f;
-    else g_back += dir * 0.5f;
-    Log("menu camera: camera_back %.2f camera_up %.2f", g_back, g_up);
+    else g_forward -= dir * 0.5f;
+    Log("menu camera: camera_forward %.2f camera_up %.2f", g_forward, g_up);
 }
