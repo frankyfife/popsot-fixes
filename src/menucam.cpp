@@ -24,12 +24,21 @@
 // applies while menu3D has been loaded and the camera is at its position. When a
 // new game starts, the camera flies from there to the Prince; the offset fades
 // out over the first kFadeDistance units of that flight instead of snapping back.
+//
+// Free camera: the same hook replaces the main view's camera matrix (display
+// *(0x9ec518), camera at +0xcc) with a free-flying one. Back (View) or F9
+// toggles it; the game gets no input meanwhile (Start still pauses).
+//   left stick / WASD    move       right stick / arrow keys  look
+//   LT / RT, Q / E       down / up  LB / RB, Ctrl / Shift     slow / fast (held)
+// The sign conventions of the I/J rows are taken from the camera when the free
+// camera starts, so the view does not flip whatever handedness the engine uses.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <string.h>
 #include <math.h>
 #include "menucam.h"
+#include "gamepad.h"
 
 void Log(const char* fmt, ...);
 
@@ -54,6 +63,138 @@ bool g_menuLoaded;  // menu3D has been loaded
 BYTE* g_cam;  // camera we moved last
 bool g_haveOut;
 float g_base[3], g_out[3];
+
+// Free camera state.
+const DWORD kCurrentDisplay = 0x009ec518;  // display being rendered (set by 0x425db0)
+struct FreeCam {
+    bool active;
+    BYTE* cam;       // main camera struct it replaces
+    float pos[3];
+    float yaw, pitch;  // radians; forward = (cos p cos y, cos p sin y, sin p)
+    float signI, signJ;
+    LARGE_INTEGER last;
+} g_free;
+
+void Cross(const float* a, const float* b, float* r)
+{
+    r[0] = a[1] * b[2] - a[2] * b[1];
+    r[1] = a[2] * b[0] - a[0] * b[2];
+    r[2] = a[0] * b[1] - a[1] * b[0];
+}
+
+float Dot(const float* a, const float* b) { return a[0] * b[0] + a[1] * b[1] + a[2] * b[2]; }
+
+void Normalize(float* v)
+{
+    float l = sqrtf(Dot(v, v));
+    if (l > 1e-6f) { v[0] /= l; v[1] /= l; v[2] /= l; }
+}
+
+// Camera rows from yaw/pitch: forward f, right r = f x Z, up u = r x f.
+void FreeCamAxes(float* f, float* r, float* u)
+{
+    f[0] = cosf(g_free.pitch) * cosf(g_free.yaw);
+    f[1] = cosf(g_free.pitch) * sinf(g_free.yaw);
+    f[2] = sinf(g_free.pitch);
+    const float z[3] = { 0.0f, 0.0f, 1.0f };
+    Cross(f, z, r);
+    Normalize(r);
+    Cross(r, f, u);
+}
+
+BYTE* MainCamera()
+{
+    BYTE* display = *(BYTE**)kCurrentDisplay;
+    return display ? display + 0xcc : nullptr;
+}
+
+void StartFreeCam()
+{
+    BYTE* cam = MainCamera();
+    if (!cam) return;
+    __try {
+        const float* I = (const float*)(cam + 0x88);
+        const float* J = (const float*)(cam + 0x98);
+        const float* K = (const float*)(cam + 0xa8);
+        float f[3] = { -K[0], -K[1], -K[2] };
+        Normalize(f);
+        g_free.yaw = atan2f(f[1], f[0]);
+        g_free.pitch = asinf(f[2] < -1.0f ? -1.0f : f[2] > 1.0f ? 1.0f : f[2]);
+        float ff[3], r[3], u[3];
+        FreeCamAxes(ff, r, u);
+        g_free.signI = Dot(I, r) < 0.0f ? -1.0f : 1.0f;
+        g_free.signJ = Dot(J, u) < 0.0f ? -1.0f : 1.0f;
+        memcpy(g_free.pos, cam + 0xb8, sizeof(g_free.pos));
+        g_free.cam = cam;
+        g_free.active = true;
+        QueryPerformanceCounter(&g_free.last);
+        Gamepad_BlockGame(true);
+        Log("free camera: on at %.2f %.2f %.2f (I %+.0f J %+.0f)", g_free.pos[0], g_free.pos[1], g_free.pos[2],
+            g_free.signI, g_free.signJ);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+}
+
+void StopFreeCam()
+{
+    g_free.active = false;
+    Gamepad_BlockGame(false);
+    Log("free camera: off");
+}
+
+float StickAxis(SHORT v, SHORT deadZone)
+{
+    float f = v / 32767.0f, d = deadZone / 32767.0f;
+    if (f > -d && f < d) return 0.0f;
+    f = f > 0 ? (f - d) / (1.0f - d) : (f + d) / (1.0f - d);
+    return f < -1.0f ? -1.0f : f > 1.0f ? 1.0f : f;
+}
+
+void UpdateFreeCam()
+{
+    LARGE_INTEGER now, freq;
+    QueryPerformanceCounter(&now);
+    QueryPerformanceFrequency(&freq);
+    float dt = (float)(now.QuadPart - g_free.last.QuadPart) / (float)freq.QuadPart;
+    g_free.last = now;
+    if (dt > 0.1f) dt = 0.1f;
+    XINPUT_GAMEPAD pad;
+    if (!Gamepad_Read(&pad)) memset(&pad, 0, sizeof(pad));
+    auto key = [](int vk) { return GetAsyncKeyState(vk) < 0 ? 1.0f : 0.0f; };
+    float speed = 6.0f;  // world units per second
+    if ((pad.wButtons & XINPUT_GAMEPAD_RIGHT_SHOULDER) || key(VK_SHIFT)) speed *= 4.0f;
+    if ((pad.wButtons & XINPUT_GAMEPAD_LEFT_SHOULDER) || key(VK_CONTROL)) speed *= 0.25f;
+    const float turn = 2.0f;  // radians per second at full deflection
+    float lookX = StickAxis(pad.sThumbRX, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE) + key(VK_RIGHT) - key(VK_LEFT);
+    float lookY = StickAxis(pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE) + key(VK_UP) - key(VK_DOWN);
+    g_free.yaw -= lookX * turn * dt;
+    g_free.pitch += lookY * turn * dt;
+    if (g_free.pitch > 1.5f) g_free.pitch = 1.5f;
+    if (g_free.pitch < -1.5f) g_free.pitch = -1.5f;
+    float f[3], r[3], u[3];
+    FreeCamAxes(f, r, u);
+    float fwd = StickAxis(pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) + key('W') - key('S');
+    float side = StickAxis(pad.sThumbLX, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE) + key('D') - key('A');
+    float lift = (pad.bRightTrigger - pad.bLeftTrigger) / 255.0f + key('E') - key('Q');
+    for (int i = 0; i < 3; i++) g_free.pos[i] += (f[i] * fwd + r[i] * side) * speed * dt;
+    g_free.pos[2] += lift * speed * dt;
+}
+
+// Writes the free camera into the camera struct.
+void ApplyFreeCam(BYTE* cam)
+{
+    float f[3], r[3], u[3];
+    FreeCamAxes(f, r, u);
+    float* I = (float*)(cam + 0x88);
+    float* J = (float*)(cam + 0x98);
+    float* K = (float*)(cam + 0xa8);
+    for (int i = 0; i < 3; i++) {
+        I[i] = g_free.signI * r[i];
+        J[i] = g_free.signJ * u[i];
+        K[i] = -f[i];
+    }
+    memcpy(cam + 0xb8, g_free.pos, sizeof(g_free.pos));
+}
 
 typedef BYTE*(__cdecl* ParseWorld_t)(void* data);
 
@@ -105,6 +246,14 @@ void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
 
 void __cdecl ViewFromCameraHook(BYTE* cam)
 {
+    if (g_free.active && cam == g_free.cam) {
+        __try {
+            ApplyFreeCam(cam);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+        }
+        g_viewFromCamera(cam);
+        return;
+    }
     __try {
         float* pos = (float*)(cam + 0xb8);
         const float* k = (const float*)(cam + 0xa8);
@@ -159,7 +308,19 @@ void MenuCam_Install(float back, float up)
 
 void MenuCam_OnPresent(bool keys)
 {
-    if (!g_installed || !keys) return;
+    if (!g_installed) return;
+    // Free camera toggle: F9 or the controller's Back (View) button.
+    static bool backDown;
+    XINPUT_GAMEPAD pad;
+    bool back = keys && Gamepad_Read(&pad) && (pad.wButtons & XINPUT_GAMEPAD_BACK);
+    bool toggle = (back && !backDown) || (keys && (GetAsyncKeyState(VK_F9) & 1));
+    backDown = back;
+    if (toggle) {
+        if (g_free.active) StopFreeCam();
+        else StartFreeCam();
+    }
+    if (g_free.active) UpdateFreeCam();
+    if (!keys) return;
     // F6 / F7 move the menu camera closer / further, with Shift down / up.
     int dir = 0;
     if (GetAsyncKeyState(VK_F6) & 1) dir = -1;

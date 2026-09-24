@@ -47,6 +47,7 @@ XInputGetState_t g_xinputGetState;
 // Controller state, refreshed at most once per millisecond tick.
 XINPUT_GAMEPAD g_pad;
 bool g_padConnected;
+bool g_blockGame;  // free camera active: the game gets no input (Start excepted)
 DWORD g_padSlot;  // XInput slot of g_pad
 DWORD g_padTick;
 
@@ -117,6 +118,7 @@ float PadValue(unsigned action)
 float __fastcall GetActionValueHook(void* input, void* /*edx*/, unsigned action)
 {
     float v = g_original(input, action);
+    if (g_blockGame && (action & 0xff) != 9) return 0.0f;
     if (!*((char*)input + 8)) return v;  // input disabled (e.g. window inactive)
     RefreshPad();
     if (!g_padConnected) return v;
@@ -135,6 +137,10 @@ GetStick_t g_originalGetStick;
 void __cdecl GetStickHook(int pad, float* out, int stick)
 {
     g_originalGetStick(pad, out, stick);
+    if (g_blockGame) {
+        out[0] = out[1] = 0.0f;
+        return;
+    }
     if (pad != 0 || !(*g_stickEnableMask & (1u << (stick + 24)))) return;  // stick disabled by the game
     RefreshPad();
     if (!g_padConnected) return;
@@ -152,6 +158,49 @@ void __cdecl GetStickHook(int pad, float* out, int stick)
             out[1] += y;
         }
     }
+}
+
+// ---------------------------------------------------------------- button prompts
+// Tutorial and menu texts reference buttons as "\p5\<code>" (font 5 on the
+// consoles, where the code is a button glyph). The PC text layout (0x43df90,
+// width 0x43dea0) asks 0x41a510 (cdecl char*(char code)) for a replacement
+// string instead: it looks up the action behind the code and returns the name
+// of the key bound to it ("LEER", "E", ...). While a controller is connected we
+// return its button names, following the mapping above:
+//   A jump -> A, B cancel -> B, C attack -> X, D dagger -> Y, L rewind -> LB,
+//   R special action -> RB, l alternate view -> LT, r look -> RT,
+//   M (also "\d2\") movement -> LS.
+const DWORD kPromptText = 0x0041a510;
+const unsigned char kPromptTextPrologue[] = { 0x83, 0xEC, 0x08, 0xB0, 0xFF, 0x56 };  // 3 whole instructions
+
+typedef const char*(__cdecl* PromptText_t)(char code);
+PromptText_t g_originalPromptText;
+
+const char* PadPrompt(char code)
+{
+    switch (code) {
+    case 'A': return "A";
+    case 'B': return "B";
+    case 'C': return "X";
+    case 'D': return "Y";
+    case 'L': return "LB";
+    case 'R': return "RB";
+    case 'l': return "LT";
+    case 'r': return "RT";
+    case 'M': return "LS";
+    }
+    return nullptr;
+}
+
+int g_promptMode;  // [controller] prompts: 0 auto (controller connected), 1 always, 2 never
+
+const char* __cdecl PromptTextHook(char code)
+{
+    RefreshPad();
+    if (g_promptMode == 1 || (g_promptMode == 0 && g_padConnected)) {
+        if (const char* s = PadPrompt(code)) return s;
+    }
+    return g_originalPromptText(code);
 }
 
 // ---------------------------------------------------------------- vibration
@@ -317,6 +366,9 @@ void Gamepad_Install()
                                             (void*)GetStickHook);
     if (!g_original || !g_originalGetStick) return;
     Log("gamepad: installed (Xbox controller mapping on all game actions)");
+    g_originalPromptText = (PromptText_t)Detour(kPromptText, kPromptTextPrologue, sizeof(kPromptTextPrologue),
+                                                (void*)PromptTextHook);
+    Log("gamepad: button prompts %s", g_originalPromptText ? "installed" : "not installed (unknown code)");
 
     // Check every site first so vibration is either fully installed or not at all.
     bool vibration = g_xinputSetState != nullptr;
@@ -338,3 +390,15 @@ void Gamepad_Shutdown()
     g_smallUntil = g_largeUntil = GetTickCount();
     SetMotors(0, 0);
 }
+
+bool Gamepad_Read(XINPUT_GAMEPAD* pad)
+{
+    RefreshPad();
+    if (!g_padConnected) return false;
+    *pad = g_pad;
+    return true;
+}
+
+void Gamepad_BlockGame(bool block) { g_blockGame = block; }
+
+void Gamepad_SetPromptMode(int mode) { g_promptMode = mode; }

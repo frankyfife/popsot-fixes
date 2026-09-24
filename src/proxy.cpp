@@ -1018,6 +1018,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             g_menuCamBack = (float)atof(v);
             GetPrivateProfileStringA("menus", "camera_up", "6.25", v, sizeof(v), g_iniPath);
             g_menuCamUp = (float)atof(v);
+            GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
+            Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
         }
         if (slash) strcpy(slash + 1, "dx_gog.dll");
         g_gog = LoadLibraryA(path);
