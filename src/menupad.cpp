@@ -10,7 +10,7 @@
 //
 // We feed the same key events from the controller:
 //   D-pad / left stick -> arrow keys (with auto-repeat)
-//   A                  -> Enter
+//   A                  -> Enter (on a list: double click on the current row)
 //   B, Y               -> Escape (back)
 // Everything runs on the render thread (called from Present), like the game's
 // own input processing.
@@ -54,6 +54,8 @@ typedef void(__thiscall* WidgetRect_t)(void* widget, short* rect);  // x0, x1, y
 typedef void(__thiscall* ElemFn_t)(void* elem);
 typedef void(__thiscall* MgrMouseMove_t)(void* mgr, const DWORD* packedPos);
 const MgrMouseMove_t MgrMouseMove = (MgrMouseMove_t)0x007125f0;
+typedef void(__thiscall* MgrMouseButton_t)(void* mgr, const DWORD* event);  // {buttons, packed position}
+const MgrMouseButton_t MgrDoubleClick = (MgrMouseButton_t)0x00712560;
 DWORD g_cursorSet = 0xFFFFFFFF;  // last cursor position we set (mouse untouched while equal)
 
 // Visible, enabled and of a focusable widget type (types as in 0x711e40).
@@ -155,6 +157,7 @@ const Signature kSignatures[] = {
     { 0x007b7ce0, { 0xC0, 0x6A, 0x71, 0x00, 0x90, 0x6A, 0x71, 0x00 } },  // list vtable
     { 0x007b7d90, { 0xA0, 0x89, 0x71, 0x00, 0x30, 0x88, 0x71, 0x00 } },  // slider vtable
     { 0x007125f0, { 0x83, 0xEC, 0x08, 0x8B, 0x44, 0x24, 0x0C, 0x8B } },
+    { 0x00712560, { 0x8B, 0x54, 0x24, 0x04, 0x8B, 0x42, 0x04, 0x89 } },
 };
 
 // ---------------------------------------------------------------- XInput
@@ -332,7 +335,20 @@ void Update()
             LogFocus(page, "move");
         }
     }
-    if (pressed & XINPUT_GAMEPAD_A) { Press(mgr, VK_RETURN); if ((page = TopPage(mgr))) LogFocus(page, "A"); }
+    if (pressed & XINPUT_GAMEPAD_A) {
+        // Lists: Enter only marks the row; the pages act on a double click on
+        // it (profile list, save lists), exactly as with the mouse.
+        char* focus = *(char**)(page + 0x40);
+        if (ListRow(focus) >= 0) {
+            PointAt(mgr, focus);
+            DWORD ev[2] = { 1, g_cursorSet };
+            Log("menu pad: double click on %s row %d", ElementName(focus), ListRow(focus));
+            MgrDoubleClick(mgr, ev);
+        } else {
+            Press(mgr, VK_RETURN);
+        }
+        if ((page = TopPage(mgr))) LogFocus(page, "A");
+    }
     if (pressed & (XINPUT_GAMEPAD_B | XINPUT_GAMEPAD_Y)) { Press(mgr, VK_ESCAPE); if ((page = TopPage(mgr))) LogFocus(page, "back"); }
 }
 
