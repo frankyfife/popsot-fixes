@@ -414,34 +414,28 @@ static bool IsBigRT(IDirect3DSurface9* surf)
     return false;
 }
 
-// thiscall quad(this, x0, y0, x1, y1, ...): scale the corners if the current
-// target is enlarged and they are still in 512 space.
+static int g_capture;  // > 0 while an F8 frame capture runs (see below)
+
+// quad(this, x0, y0, x1, y1, ...): scale the corners if the current target is
+// enlarged and they are still in 512 space.
+extern "C" void __cdecl QuadAdjust(float* c)
+{
+    float s = g_quadScale;
+    bool scaled = s != 1.0f && c[2] <= 513.0f && c[3] <= 513.0f;
+    if (g_capture) Log("cap: quad %.1f,%.1f - %.1f,%.1f%s", c[0], c[1], c[2], c[3], scaled ? " (scaled)" : "");
+    if (scaled)
+        for (int i = 0; i < 4; i++) c[i] *= s;
+}
+
 extern "C" __declspec(naked) void QuadHook()
 {
     __asm {
-        fld dword ptr [g_quadScale]
-        fld1
-        fcomip st, st(1)
-        fstp st(0)
-        je done
-        mov eax, 0x44008000          // 513.0f
-        cmp dword ptr [esp + 12], eax // x1 (positive floats compare as ints)
-        ja done
-        cmp dword ptr [esp + 16], eax // y1
-        ja done
-        fld dword ptr [esp + 4]
-        fmul dword ptr [g_quadScale]
-        fstp dword ptr [esp + 4]
-        fld dword ptr [esp + 8]
-        fmul dword ptr [g_quadScale]
-        fstp dword ptr [esp + 8]
-        fld dword ptr [esp + 12]
-        fmul dword ptr [g_quadScale]
-        fstp dword ptr [esp + 12]
-        fld dword ptr [esp + 16]
-        fmul dword ptr [g_quadScale]
-        fstp dword ptr [esp + 16]
-    done:
+        push ecx                  // this
+        lea eax, [esp + 8]        // first stack argument
+        push eax
+        call QuadAdjust
+        add esp, 4
+        pop ecx
         jmp dword ptr [g_quadOriginal]
     }
 }
@@ -477,7 +471,6 @@ static void ScaleRect(const RECT* in, RECT& out, float s)
 
 // ---------------------------------------------------------------- frame capture (F8; F11 is taken by the GOG overlay)
 // Logs every render step of one frame, to analyse post effects.
-static int g_capture;  // > 0 while capturing
 static SetViewport_t o_SetViewport;
 static SetFVF_t o_SetFVF;
 static SetVertexShader_t o_SetVertexShader;
