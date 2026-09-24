@@ -617,6 +617,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     }
     MenuPad_OnPresent();
     MenuCam_OnPresent(!g_gameWindow || GetForegroundWindow() == g_gameWindow);
+    Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
     Trace_ProbeMenuManager();
     return o_Present(dev, sr, dr, w, rgn);
@@ -1045,6 +1046,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         if (slash) {
             slash[1] = 0;
             strcpy(g_gameDir, path);
+            Sound_SetForceEax(GetPrivateProfileIntA("sound", "eax", 1, g_iniPath) != 0);
             Sound_Install(g_gameDir);
             Video_Install(GetPrivateProfileIntA("video", "keep_aspect", 1, g_iniPath) != 0);
             strcpy(slash + 1, "dx_gog.dll");

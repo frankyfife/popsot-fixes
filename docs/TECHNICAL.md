@@ -311,4 +311,6 @@ audio is on (`0x414070`, `0x414020`).
 **Fix (`sound.cpp`):** if `dsound.dll` from DSOAL is in the game folder, `EAX.DLL`'s
 import of `CoCreateInstance` is patched to create DirectSound objects through DSOAL's
 class factory (`DllGetClassObject`), uninitialized like the COM path. DSOAL emulates
-EAX on OpenAL Soft and outputs to the Windows speaker setup.
+EAX on OpenAL Soft and outputs to the Windows speaker setup. With `[sound] eax=1` the
+setters `0x414020` (3D audio) and `0x414070` (EAX) are called on the configuration
+once `0x413ff0` reports EAX as available.

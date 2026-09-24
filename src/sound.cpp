@@ -12,6 +12,11 @@
 // CoCreateInstance so that DirectSound objects come from DSOAL's class factory
 // (DllGetClassObject). The object is created uninitialized, exactly like the COM
 // path, so EAX.DLL initializes it as before.
+//
+// The audio options only offer EAX when the device supports it and 3D audio is
+// on (config *(0x80c0c4): +0xc 3D audio, +0x10 EAX; setters 0x414020 and
+// 0x414070, support check 0x413ff0). With [sound] eax=1 both are switched on
+// through those setters once DSOAL reports EAX.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -31,6 +36,18 @@ typedef HRESULT(WINAPI* DllGetClassObject_t)(REFCLSID, REFIID, LPVOID*);
 
 CoCreateInstance_t g_coCreateInstance;
 DllGetClassObject_t g_dsoalGetClassObject;
+
+const DWORD kConfig = 0x0080c0c4;
+typedef void(__thiscall* SetAudioFlag_t)(void* config, int on);
+typedef int(__thiscall* EaxAvailable_t)(void* config);
+const SetAudioFlag_t Set3DAudio = (SetAudioFlag_t)0x00414020;
+const SetAudioFlag_t SetEax = (SetAudioFlag_t)0x00414070;
+const EaxAvailable_t EaxAvailable = (EaxAvailable_t)0x00413ff0;
+const unsigned char kSet3DAudioCode[] = { 0x8B, 0x44, 0x24, 0x04, 0x56, 0x8B, 0xF1, 0x89, 0x46, 0x0C };
+const unsigned char kSetEaxCode[] = { 0x80, 0x3D, 0x64, 0x43, 0xAF, 0x00, 0x01, 0x56, 0x8B, 0xF1, 0x75, 0x47 };
+const unsigned char kEaxAvailableCode[] = { 0x80, 0x3D, 0x64, 0x43, 0xAF, 0x00, 0x01, 0x56, 0x8B, 0xF1, 0x75, 0x20 };
+bool g_forceEax;
+bool g_routed;  // DirectSound goes through DSOAL
 
 HRESULT WINAPI CoCreateInstanceHook(REFCLSID clsid, LPUNKNOWN outer, DWORD ctx, REFIID iid, LPVOID* out)
 {
@@ -74,7 +91,41 @@ void Sound_Install(const char* gameDir)
         return;
     }
     if (PatchImport(eax, "ole32.dll", "CoCreateInstance", (void*)CoCreateInstanceHook, (void**)&g_coCreateInstance))
+    {
+        g_routed = true;
         Log("sound: EAX.DLL creates DirectSound through DSOAL (%s)", path);
+    }
     else
         Log("sound: EAX.DLL import of CoCreateInstance not found");
+}
+
+void Sound_SetForceEax(bool on) { g_forceEax = on; }
+
+void Sound_OnFrame()
+{
+    static DWORD last;
+    static bool codeOk, checked, done;
+    if (!g_forceEax || !g_routed || done) return;
+    if (!checked) {
+        checked = true;
+        codeOk = memcmp((void*)Set3DAudio, kSet3DAudioCode, sizeof(kSet3DAudioCode)) == 0 &&
+                 memcmp((void*)SetEax, kSetEaxCode, sizeof(kSetEaxCode)) == 0 &&
+                 memcmp((void*)EaxAvailable, kEaxAvailableCode, sizeof(kEaxAvailableCode)) == 0;
+        if (!codeOk) Log("sound: unknown audio option code, EAX not switched on");
+    }
+    if (!codeOk || GetTickCount() - last < 2000) return;
+    last = GetTickCount();
+    __try {
+        BYTE* config = *(BYTE**)kConfig;
+        if (!config) return;
+        if (*(int*)(config + 0x10)) { done = true; Log("sound: EAX is on"); return; }
+        if (!*(int*)(config + 0xc)) Set3DAudio(config, 1);
+        if (EaxAvailable(config)) {
+            SetEax(config, 1);
+            Log("sound: 3D audio and EAX switched on (%d)", *(int*)(config + 0x10));
+            done = *(int*)(config + 0x10) != 0;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        done = true;
+    }
 }

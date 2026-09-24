@@ -86,7 +86,7 @@ The game's EAX 2 reverb and 3D sound need hardware DirectSound3D, which Windows 
 longer has. With [DSOAL](https://github.com/kcat/dsoal) in the game folder (`dsound.dll`,
 `dsoal-aldrv.dll`, optional `alsoft.ini`), the fix routes the game's sound through it:
 EAX is emulated and output follows the Windows speaker setup (stereo, headphones,
-5.1, 7.1). Turn on *3D Audio* and *EAX* in the game's audio options. DSOAL is not
+5.1, 7.1). 3D audio and EAX are switched on automatically (`[sound] eax`). DSOAL is not
 included in this project.
 
 ### Level select
@@ -112,6 +112,7 @@ file is the default.
 | `[menus] camera_back` / `camera_up` | `3.5` / `6.25` | main-menu camera offset, 0 = original |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
+| `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |
 
 ## Requirements
 
