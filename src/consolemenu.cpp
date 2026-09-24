@@ -26,6 +26,8 @@
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
 #include <string.h>
+#include <stdio.h>
+#include <intrin.h>
 #include "consolemenu.h"
 
 void Log(const char* fmt, ...);
@@ -314,6 +316,134 @@ int __cdecl LoadGameHook(int slot, void* data, int size)
     return ok;
 }
 
+// ---------------------------------------------------------------- save list
+// After "Save the game? - Yes" the save script (Xbox 0x2cae60, PC 0x4cba50) opens
+// the save page. On Xbox it first fills the page's text list with one entry per
+// slot (0x2c95b0): "hh:mm - pct%        \x0.2\<level name>" for a saved game,
+// "Empty" otherwise. The PC port dropped that call, so the page shows nothing.
+// We fill it at the PC's page-open call (0x4cbbc3): the PC save files in the
+// order of the PC save list, then one empty entry. The selected index is what
+// the script passes to the save (see SaveGameHook: past the end = new file).
+//
+// Page text list (same layout on Xbox and PC): list object at +0xa8
+// {?, head node, count}, node {next, prev, char*}; current node +0xb4, first
+// visible element +0xb8, scroll +0xbc/+0xc0. 0x6970e0 clears and resets it.
+const DWORD kSavePageOpenCall = 0x004cbbc3;
+typedef void(__cdecl* OpenPage_t)(int page, int a, int b);
+const OpenPage_t OpenPage = (OpenPage_t)0x00467b70;
+typedef void(__fastcall* PageListReset_t)(char* page);
+const PageListReset_t PageListReset = (PageListReset_t)0x006970e0;
+typedef void*(__thiscall* Alloc_t)(void* allocator, size_t size);
+typedef void*(__cdecl* CreateAllocator_t)(int);
+const Alloc_t JadeAlloc = (Alloc_t)0x0041b180;
+const CreateAllocator_t CreateAllocator = (CreateAllocator_t)0x00654e80;
+void** const g_allocator = (void**)0x00ade188;
+typedef void(__cdecl* SaveInfo_t)(int index, unsigned* kind, unsigned* seconds, void* time16);
+const SaveInfo_t SaveInfo = (SaveInfo_t)0x0041c4f0;
+typedef void(__cdecl* TextRef_t)(DWORD bank, unsigned index, void* ref8);
+typedef const char*(__cdecl* TextGet_t)(void* ref8);
+const TextRef_t TextRef = (TextRef_t)0x0045e130;
+const TextGet_t TextGet = (TextGet_t)0x0045e080;
+const DWORD kLevelNames = 0x0b004f7d;                      // text bank of the save point names
+const unsigned short* const g_progress = (const unsigned short*)0x007a969a;  // percent, stride 4 bytes
+typedef int(__fastcall* GameLanguage_t)(void* settings);
+const GameLanguage_t GameLanguage = (GameLanguage_t)0x00418120;  // 0 en, 1 fr, 2 de, 3 es, 4 it
+
+void AddListEntry(char* page, const char* text)
+{
+    DWORD* head = *(DWORD**)(page + 0xac);
+    if (!head) return;
+    void* allocator = *g_allocator;
+    if (!allocator) allocator = CreateAllocator(2);
+    DWORD* node = (DWORD*)JadeAlloc(allocator, 12);
+    if (!node) return;
+    DWORD* last = (DWORD*)head[1];
+    node[0] = (DWORD)head;
+    node[1] = (DWORD)last;
+    node[2] = (DWORD)text;
+    last[0] = (DWORD)node;
+    head[1] = (DWORD)node;
+    (*(int*)(page + 0xb0))++;
+}
+
+const char* EmptyText()
+{
+    // Xbox EU/US builds keep these as plain strings next to the list code.
+    static const char* const texts[] = { "Empty", "Vide", "Leer", "Vac\xEDo", "Vuoto" };
+    void* settings = *(void**)0x0080c1ec;
+    int lang = settings ? GameLanguage(settings) : 0;
+    return texts[lang >= 0 && lang < 5 ? lang : 0];
+}
+
+// Diagnostics: every console page the scripts open (0x467b70), with the caller.
+const unsigned char kOpenPagePrologue[] = { 0xA1, 0x14, 0x24, 0xAF, 0x00 };  // mov eax, [0xaf2414]
+OpenPage_t g_openPageOriginal;
+
+void __cdecl OpenPageHook(int pageIndex, int a, int b)
+{
+    static int logged;
+    if (logged < 200) {
+        logged++;
+        Log("console menu: open page %d (%d, %d) from %08lx", pageIndex, a, b, (DWORD)_ReturnAddress());
+    }
+    g_openPageOriginal(pageIndex, a, b);
+}
+
+void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
+{
+    unsigned char* fn = (unsigned char*)addr;
+    if (memcmp(fn, prologue, len) != 0) return nullptr;
+    unsigned char* tramp = (unsigned char*)VirtualAlloc(nullptr, 32, MEM_COMMIT | MEM_RESERVE, PAGE_EXECUTE_READWRITE);
+    if (!tramp) return nullptr;
+    memcpy(tramp, fn, len);
+    tramp[len] = 0xE9;
+    *(DWORD*)(tramp + len + 1) = (DWORD)(fn + len) - (DWORD)(tramp + len + 5);
+    DWORD prot;
+    VirtualProtect(fn, len, PAGE_EXECUTE_READWRITE, &prot);
+    fn[0] = 0xE9;
+    *(DWORD*)(fn + 1) = (DWORD)hook - (DWORD)(fn + 5);
+    for (size_t i = 5; i < len; i++) fn[i] = 0x90;
+    VirtualProtect(fn, len, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), fn, len);
+    return tramp;
+}
+
+void __cdecl SavePageOpen(int pageIndex, int a, int b)
+{
+    char* mgr = *g_menuManager;
+    char* page = mgr ? *(char**)(*(char**)(mgr + 4) + pageIndex * 4) : nullptr;
+    if (page && *(DWORD**)(page + 0xac)) {
+        static char texts[64][160];  // the list keeps pointers to these
+        PageListReset(page);
+        int n = 0;
+        if (EnsureProfile()) {
+            EnumSaves();
+            n = SaveCount();
+            if (n > 63) n = 63;
+            for (int i = 0; i < n; i++) {
+                unsigned kind = 0, seconds = 0;
+                unsigned time[4] = {};
+                SaveInfo(i, &kind, &seconds, time);
+                DWORD ref[2];
+                TextRef(kLevelNames, kind, ref);
+                const char* level = TextGet(ref);
+                unsigned point = kind > 1 ? kind - 1 : kind;
+                unsigned minutes = seconds / 60;
+                _snprintf(texts[i], sizeof(texts[i]) - 1, "%02u:%02u - %u%%        \\x0.2\\%s", minutes / 60,
+                          minutes % 60, (unsigned)g_progress[point * 2], level ? level : "");
+                texts[i][sizeof(texts[i]) - 1] = 0;
+                AddListEntry(page, texts[i]);
+            }
+            FreeSaves();
+        }
+        AddListEntry(page, EmptyText());
+        DWORD* head = *(DWORD**)(page + 0xac);
+        *(DWORD*)(page + 0xb4) = head[0];  // current = first entry
+        Log("console menu: save page %d filled with %d save games + empty slot", pageIndex, n);
+    }
+    OpenPage(pageIndex, a, b);
+}
+
 bool IsCallTo(DWORD site, DWORD target)
 {
     const unsigned char* p = (const unsigned char*)site;
@@ -361,7 +491,8 @@ void ConsoleMenu_Enable()
         memcmp((void*)kSavePageCall, kSavePageCallBytes, sizeof(kSavePageCallBytes)) != 0 ||
         memcmp((void*)kDialogAnswer, kDialogAnswerBytes, sizeof(kDialogAnswerBytes)) != 0 ||
         !IsCallTo(kSaveCall, (DWORD)PcSaveGame) || !IsCallTo(kLoadCalls[0], (DWORD)PcLoadGame) ||
-        !IsCallTo(kLoadCalls[1], (DWORD)PcLoadGame)) {
+        !IsCallTo(kLoadCalls[1], (DWORD)PcLoadGame) || !IsCallTo(kSavePageOpenCall, (DWORD)OpenPage) ||
+        memcmp((void*)OpenPage, kOpenPagePrologue, sizeof(kOpenPagePrologue)) != 0) {
         Log("console menu: unknown executable, not enabled");
         return;
     }
@@ -387,7 +518,10 @@ void ConsoleMenu_Enable()
 
     RedirectCall(kSaveCall, (void*)SaveGameHook);
     for (DWORD site : kLoadCalls) RedirectCall(site, (void*)LoadGameHook);
+    RedirectCall(kSavePageOpenCall, (void*)SavePageOpen);
+    g_openPageOriginal = (OpenPage_t)Detour((DWORD)OpenPage, kOpenPagePrologue, sizeof(kOpenPagePrologue),
+                                            (void*)OpenPageHook);
 
     Log("console menu: enabled (PC redirect removed, Xbox menu tick restored, pad input kept, element show restored, "
-        "console save dialog)");
+        "console save dialog and save list)");
 }
