@@ -36,6 +36,34 @@ typedef void(__thiscall* MgrKey_t)(void* mgr, const KeyEvent* ev);
 const MgrKey_t MgrKeyDown = (MgrKey_t)0x007124c0;
 const MgrKey_t MgrKeyUp = (MgrKey_t)0x007124e0;
 
+// The MNU library came from the consoles and handles key and pad events in
+// every widget, but the PC port switched that off per widget in the page data:
+//   button instances (vtables 0x7b7f78, 0x7b7fc0): byte +0x54 = keys enabled
+//   lists            (vtable 0x7b7ce0):            bit 0 of +0x60 = keys enabled
+// Without it they ignore arrows and Enter (sliders and edit boxes have no such
+// switch). We turn it on for the elements of the top page.
+const DWORD kButtonVtables[] = { 0x007b7f78, 0x007b7fc0 };
+const DWORD kListVtable = 0x007b7ce0;
+
+int EnableKeys(char* page)
+{
+    int changed = 0;
+    char** it = *(char***)(page + 0x28);
+    char** end = *(char***)(page + 0x2c);
+    for (; it && it < end; it++) {
+        char* elem = *it;
+        char* widget = elem ? *(char**)(elem + 0x2c) : nullptr;
+        if (!widget) continue;
+        DWORD vt = *(DWORD*)widget;
+        if (vt == kListVtable) {
+            if (!(widget[0x60] & 1)) { widget[0x60] |= 1; changed++; }
+        } else if (vt == kButtonVtables[0] || vt == kButtonVtables[1]) {
+            if (!widget[0x54]) { widget[0x54] = 1; changed++; }
+        }
+    }
+    return changed;
+}
+
 // Prologue bytes checked before anything is called, so an unknown executable
 // build simply leaves the feature disabled.
 struct Signature { DWORD addr; unsigned char bytes[8]; };
@@ -43,6 +71,7 @@ const Signature kSignatures[] = {
     { 0x007124c0, { 0x8B, 0x41, 0x10, 0x85, 0xC0, 0x7E, 0x0E, 0x8B } },
     { 0x007124e0, { 0x8B, 0x41, 0x10, 0x85, 0xC0, 0x7E, 0x0E, 0x8B } },
     { 0x00716e60, { 0x56, 0x8B, 0xF1, 0x8B, 0x46, 0x40, 0x85, 0xC0 } },
+    { 0x007b7ce0, { 0xC0, 0x6A, 0x71, 0x00, 0x90, 0x6A, 0x71, 0x00 } },  // list vtable
 };
 
 // ---------------------------------------------------------------- XInput
@@ -130,10 +159,16 @@ DWORD DirectionKey(const XINPUT_GAMEPAD& p)
     return x < 0 ? VK_LEFT : VK_RIGHT;
 }
 
+int g_lastItem = -2;
+
 void LogFocus(char* page, const char* why)
 {
     char* focus = *(char**)(page + 0x40);
-    if (page == g_lastPage && focus == g_lastFocus) return;
+    char* widget = focus ? *(char**)(focus + 0x2c) : nullptr;
+    int item = widget && *(DWORD*)widget == kListVtable ? *(int*)(widget + 0x30) : -1;  // current list row
+    if (page == g_lastPage && focus == g_lastFocus && item == g_lastItem) return;
+    g_lastItem = item;
+    if (page == g_lastPage && focus == g_lastFocus) { Log("menu pad: %s row %d (%s)", ElementName(focus), item, why); return; }
     if (page != g_lastPage) Log("menu pad: page %p", page);
     Log("menu pad: focus %s (%s)", ElementName(focus), why);
     g_lastPage = page;
@@ -153,7 +188,10 @@ void Update()
 
     char* page = TopPage(mgr);
     if (!page) { g_lastPage = nullptr; g_heldKey = 0; return; }
-    if (g_hwnd && GetForegroundWindow() != g_hwnd) return;
+    DWORD pid = 0;
+    GetWindowThreadProcessId(GetForegroundWindow(), &pid);
+    if (pid != GetCurrentProcessId()) return;  // game not in the foreground
+    if (int n = EnableKeys(page)) Log("menu pad: key navigation enabled on %d widgets of page %p", n, page);
     LogFocus(page, "page");
     if (!havePad) return;
 
