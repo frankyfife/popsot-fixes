@@ -10,8 +10,8 @@
 // frame (main view 0x425db0, visibility 0x47b3b0, ...). The camera struct (display +0xcc)
 // holds the camera's world matrix at +0x88: rows I (+0x88), J (+0x98),
 // K (+0xa8, the viewing direction) and the position at +0xb8. We detour
-// 0x437f70 and, in the main menu, move the position along K and up along the
-// world Z axis first.
+// 0x437f70 and, in the main menu, move the position along K, sideways (K x Z,
+// to the right) and up along the world Z axis first.
 // The engine rewrites the camera matrix every frame; if it did not, the stored
 // base position is reused so the offset never accumulates.
 //
@@ -60,6 +60,7 @@ ViewFromCamera_t g_viewFromCamera;  // trampoline
 
 float g_forward = 0.0f;  // [menus] camera_forward
 float g_up = 0.0f;    // [menus] camera_up
+float g_side = 0.0f;  // [menus] camera_side (positive = right)
 bool g_installed;
 bool g_menuLoaded;  // menu3D has been loaded
 BYTE* g_cam;  // camera we moved last
@@ -281,8 +282,10 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         float base[3];
         memcpy(base, ours ? g_base : pos, sizeof(base));
         float w = MenuCameraWeight(base);
-        if (w > 0.0f && (g_forward != 0.0f || g_up != 0.0f)) {
-            for (int i = 0; i < 3; i++) pos[i] = base[i] + w * g_forward * k[i];
+        if (w > 0.0f && (g_forward != 0.0f || g_up != 0.0f || g_side != 0.0f)) {
+            float right[3] = { k[1], -k[0], 0.0f };  // k x Z
+            Normalize(right);
+            for (int i = 0; i < 3; i++) pos[i] = base[i] + w * (g_forward * k[i] + g_side * right[i]);
             pos[2] += w * g_up;
             g_cam = cam;
             memcpy(g_base, base, sizeof(g_base));
@@ -299,11 +302,12 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
 
 }  // namespace
 
-void MenuCam_Install(float forward, float up)
+void MenuCam_Install(float forward, float up, float side)
 {
     if (g_installed) return;
     g_forward = forward;
     g_up = up;
+    g_side = side;
     bool known = memcmp((void*)kViewFromCamera, kViewFromCameraPrologue, sizeof(kViewFromCameraPrologue)) == 0;
     for (DWORD push : kParseWorldPushes)
         known = known && *(BYTE*)push == 0x68 && *(DWORD*)(push + 1) == kParseWorld;
@@ -321,7 +325,7 @@ void MenuCam_Install(float forward, float up)
         VirtualProtect((void*)(push + 1), 4, prot, &prot);
     }
     g_installed = true;
-    Log("menu camera: enabled, camera_forward %.2f camera_up %.2f", g_forward, g_up);
+    Log("menu camera: enabled, camera_forward %.2f camera_up %.2f camera_side %.2f", g_forward, g_up, g_side);
 }
 
 void MenuCam_OnPresent(bool keys)
@@ -339,12 +343,14 @@ void MenuCam_OnPresent(bool keys)
     }
     if (g_free.active) UpdateFreeCam();
     if (!keys) return;
-    // F6 / F7 move the menu camera closer / further, with Shift down / up.
+    // F6 / F7 move the menu camera closer / further, with Shift down / up and
+    // with Ctrl left / right.
     int dir = 0;
     if (GetAsyncKeyState(VK_F6) & 1) dir = -1;
     if (GetAsyncKeyState(VK_F7) & 1) dir = 1;
     if (!dir) return;
     if (GetAsyncKeyState(VK_SHIFT) < 0) g_up += dir * 0.25f;
+    else if (GetAsyncKeyState(VK_CONTROL) < 0) g_side += dir * 0.25f;
     else g_forward -= dir * 0.5f;
-    Log("menu camera: camera_forward %.2f camera_up %.2f", g_forward, g_up);
+    Log("menu camera: camera_forward %.2f camera_up %.2f camera_side %.2f", g_forward, g_up, g_side);
 }

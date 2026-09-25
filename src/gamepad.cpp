@@ -12,7 +12,7 @@
 //   11 left stick click, 12 D-pad up, 13 right, 14 down, 15 left.
 // Shoulders and triggers follow the PS2 layout instead (see PadValue):
 //   LB rewind (Xbox L trigger), RB special action (Xbox R trigger),
-//   LT alternate view (Xbox White), RT look (Xbox Black).
+//   LT alternate view (Xbox Black), RT look (Xbox White).
 // Action 8 (Back/View) is left unmapped: the PC port bound it to "quit game".
 //
 // The sticks go through the engine's stick query (0x41fd20, cdecl
@@ -100,8 +100,8 @@ float PadValue(unsigned action)
     // The original Xbox pad had no shoulder buttons. The PS2 layout of the same
     // game (L1 rewind, R1 special action, L2 alternate view, R2 look) maps better
     // onto a modern pad, so shoulders and triggers follow it:
-    case 4: return Trigger(g_pad.bRightTrigger);           // Black: look (PS2 R2)
-    case 5: return Trigger(g_pad.bLeftTrigger);            // White: alternate view (PS2 L2)
+    case 4: return Trigger(g_pad.bLeftTrigger);            // Black: alternate view (text code \p5\l)
+    case 5: return Trigger(g_pad.bRightTrigger);           // White: look (text code \p5\r)
     case 6: return Button(XINPUT_GAMEPAD_LEFT_SHOULDER);   // L trigger: rewind (PS2 L1)
     case 7: return Button(XINPUT_GAMEPAD_RIGHT_SHOULDER);  // R trigger: special action (PS2 R1)
     case 9: return Button(XINPUT_GAMEPAD_START);

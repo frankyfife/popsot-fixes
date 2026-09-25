@@ -200,8 +200,8 @@ from the mouse plus actions `0x29`–`0x2c`, gated by the mask at `0x7f1578`.
 **Fix (`gamepad.cpp`):** `GetActionValue` returns the maximum of the original value and
 an XInput pad mapped as above for the face buttons, D-pad, Start and stick clicks. Shoulders
 and triggers follow the PS2 layout of the game, since the original Xbox pad had no shoulder
-buttons: LB = L trigger (rewind), RB = R trigger (special action), LT = White (alternate
-view), RT = Black (look). Back is left unmapped because the
+buttons: LB = L trigger (rewind), RB = R trigger (special action), LT = Black (alternate
+view, text code `\p5\l`), RT = White (look, `\p5\r`). Back is left unmapped because the
 PC port bound action 8 to "quit game"). The stick query is filled straight from the pad
 with a round dead zone.
 

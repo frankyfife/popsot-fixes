@@ -69,8 +69,8 @@ when the game window loses focus.
 
 ### Main menu on wide screens
 The main menu's 3D scene was built for 4:3; on wide screens its edges show. Like the
-PS3 HD version, the menu camera is moved – forward and up here (adjustable, F6 / F7 and
-Shift+F6 / F7 in the main menu). When a new game starts, the camera flies to the
+PS3 HD version, the menu camera is moved – forward and up here (adjustable in the main menu:
+F6 / F7, with Shift up / down, with Ctrl left / right). When a new game starts, the camera flies to the
 Prince without a jump.
 
 ### Videos
@@ -110,7 +110,7 @@ file is the default.
 | `[post] blur_resolution` | `4` | size of the blur targets, 1 = original 512×512, up to 4× |
 | `[post] blur` | `1` | 0 disables the zoom/speed blur |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
-| `[menus] camera_forward` / `camera_up` | `3.5` / `6.25` | main-menu camera offset, 0 = original |
+| `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |
