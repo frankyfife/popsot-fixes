@@ -22,8 +22,8 @@
 // into a "SuperWorld", and other worlds (Prince, CameraAndGlobal, ...) are
 // loaded after it. The menu camera (Camera02 of menu3D) is static, so the offset
 // applies while menu3D has been loaded and the camera is at its position. When a
-// new game starts, the camera flies from there to the Prince; the offset fades
-// out within kFadeTime of the camera leaving the menu position.
+// new game starts, the camera flies from there to the Prince; see
+// MenuCameraTarget for how the moved camera follows that flight.
 //
 // Free camera: the same hook replaces the main view's camera matrix (display
 // *(0x9ec518), camera at +0xcc) with a free-flying one. Back (View) or F9
@@ -53,8 +53,8 @@ const DWORD kParseWorldPushes[] = { 0x006780c9, 0x0068c1c1 };  // push 0x68bc80
 const DWORD kWorldName = 0x1d8;
 const char kMenuWorld[] = "menu3D";
 const float kMenuCamPos[3] = { -83.59f, 1.39f, -2.66f };  // Camera02 in menu3D
-const float kFadeDistance = 8.0f;  // cameras further from the menu position get no offset
-const float kFadeTime = 600.0f;     // ms
+const float kFlightEnd[3] = { -92.802f, -0.965f, 3.932f };  // end of the new-game camera flight
+const float kPrince[3] = { -103.2f, -5.05f, 1.0f };           // the Prince on the balcony during that flight
 
 typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
 ViewFromCamera_t g_viewFromCamera;  // trampoline
@@ -67,6 +67,7 @@ bool g_menuLoaded;  // menu3D has been loaded
 BYTE* g_cam;  // camera we moved last
 bool g_haveOut;
 float g_base[3], g_out[3];
+BYTE g_baseRows[0x30];  // camera rows I, J, K before our turn
 
 // Free camera state.
 const DWORD kCurrentDisplay = 0x009ec518;  // display being rendered (set by 0x425db0)
@@ -156,7 +157,8 @@ void StopFreeCam()
     SetFrozen(false);
     g_free.active = false;
     Gamepad_BlockGame(false);
-    Log("free camera: off");
+    Log("free camera: off at %.2f %.2f %.2f (yaw %.3f pitch %.3f)", g_free.pos[0], g_free.pos[1], g_free.pos[2],
+        g_free.yaw, g_free.pitch);
 }
 
 float StickAxis(SHORT v, SHORT deadZone)
@@ -235,23 +237,77 @@ BYTE* __cdecl ParseWorldHook(void* data)
     return world;
 }
 
-// 1 while the camera rests at the menu position. When it leaves (new game), the
-// offset fades out over kFadeTime: fading it over the flight distance instead
-// moved the camera off the path the game aims at the Prince, pushing him out of
-// the picture. Cameras far from the menu position get no offset.
-float MenuCameraWeight(const float* pos)
+// Where the main camera should be (false = leave it alone). In the menu the
+// camera rests at kMenuCamPos; we move it to g_start (forward, sideways, up).
+// When a new game starts, the game flies it forward and up to kFlightEnd (the
+// balcony camera) in about eight seconds. We follow that flight's progress s
+// (its position projected onto the line menu -> end) but interpolate from our
+// start instead of the menu position, so the camera travels on from where the
+// menu showed it, at the game's pace, and arrives exactly where the game's
+// flight ends; the viewing direction stays the game's.
+// Rotates v around the unit axis a by angle (Rodrigues).
+void Rotate(float* v, const float* a, float c, float sn)
 {
-    static DWORD leftTick;  // when the camera left the menu position, 0 = still there
-    if (!g_menuLoaded) return 0.0f;
-    float d2 = 0.0f;
-    for (int i = 0; i < 3; i++) d2 += (pos[i] - kMenuCamPos[i]) * (pos[i] - kMenuCamPos[i]);
-    if (d2 < 0.05f * 0.05f) { leftTick = 0; return 1.0f; }
-    if (d2 >= kFadeDistance * kFadeDistance) return 0.0f;
-    if (!leftTick) leftTick = GetTickCount();
-    float t = (GetTickCount() - leftTick) / kFadeTime;
-    if (t >= 1.0f) return 0.0f;
-    float w = 1.0f - t;
-    return w * w * (3.0f - 2.0f * w);  // smoothstep
+    float axv[3];
+    Cross(a, v, axv);
+    float d = Dot(a, v);
+    for (int i = 0; i < 3; i++) v[i] = v[i] * c + axv[i] * sn + a[i] * d * (1.0f - c);
+}
+
+// *aimWeight > 0: turn the camera so the Prince appears where the game's flight
+// shows him (our path runs higher, looking the game's way would lose him).
+bool MenuCameraTarget(const float* base, const float* k, float* out, float* aimWeight)
+{
+    *aimWeight = 0.0f;
+    static bool flightDone;
+    static float start[3];
+    if (!g_menuLoaded || (g_forward == 0.0f && g_up == 0.0f && g_side == 0.0f)) return false;
+    float d[3], e[3];
+    for (int i = 0; i < 3; i++) { d[i] = base[i] - kMenuCamPos[i]; e[i] = kFlightEnd[i] - kMenuCamPos[i]; }
+    if (Dot(d, d) < 0.05f * 0.05f) {
+        float right[3] = { k[1], -k[0], 0.0f };  // k x Z
+        Normalize(right);
+        for (int i = 0; i < 3; i++) start[i] = base[i] + g_forward * k[i] + g_side * right[i];
+        start[2] += g_up;
+        memcpy(out, start, sizeof(start));
+        flightDone = false;
+        return true;
+    }
+    if (flightDone) return false;
+    float s = Dot(d, e) / Dot(e, e);
+    float off[3];
+    for (int i = 0; i < 3; i++) off[i] = d[i] - s * e[i];
+    // The main display also renders passes from other positions (e.g. the
+    // origin); only positions on the flight path count.
+    if (Dot(off, off) > 4.0f * 4.0f || s < -0.2f) return false;
+    if (s >= 0.999f) {  // arrived: the game's camera takes over until the menu returns
+        flightDone = true;
+        return false;
+    }
+    if (s < 0.0f) s = 0.0f;
+    for (int i = 0; i < 3; i++) out[i] = start[i] + s * (kFlightEnd[i] - start[i]);
+    float w = s / 0.15f;  // the menu picture is kept; the aim comes in during the first part of the flight
+    if (w > 1.0f) w = 1.0f;
+    *aimWeight = w * w * (3.0f - 2.0f * w);
+    return true;
+}
+
+// Turns the camera rows I, J, K (+0x88, +0x98, +0xa8) so that the Prince, seen
+// from `from` by the game, is seen in the same place from `to`.
+void AimAtPrince(BYTE* cam, const float* from, const float* to, float weight)
+{
+    float a[3], b[3];
+    for (int i = 0; i < 3; i++) { a[i] = kPrince[i] - from[i]; b[i] = kPrince[i] - to[i]; }
+    Normalize(a);
+    Normalize(b);
+    float axis[3];
+    Cross(a, b, axis);
+    float sn = sqrtf(Dot(axis, axis));
+    if (sn < 1e-6f) return;
+    for (int i = 0; i < 3; i++) axis[i] /= sn;
+    float angle = atan2f(sn, Dot(a, b)) * weight;
+    float c = cosf(angle), sa = sinf(angle);
+    for (int row = 0; row < 3; row++) Rotate((float*)(cam + 0x88 + row * 0x10), axis, c, sa);
 }
 
 void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
@@ -288,14 +344,14 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         // Several cameras pass through here every frame; the offset state belongs
         // to the one we moved last.
         bool ours = cam == g_cam && g_haveOut && memcmp(pos, g_out, sizeof(g_out)) == 0;
+        if (ours) memcpy(cam + 0x88, g_baseRows, sizeof(g_baseRows));  // undo our turn
         float base[3];
         memcpy(base, ours ? g_base : pos, sizeof(base));
-        float w = MenuCameraWeight(base);
-        if (w > 0.0f && (g_forward != 0.0f || g_up != 0.0f || g_side != 0.0f)) {
-            float right[3] = { k[1], -k[0], 0.0f };  // k x Z
-            Normalize(right);
-            for (int i = 0; i < 3; i++) pos[i] = base[i] + w * (g_forward * k[i] + g_side * right[i]);
-            pos[2] += w * g_up;
+        float target[3], aim;
+        if (cam == MainCamera() && MenuCameraTarget(base, k, target, &aim)) {
+            memcpy(g_baseRows, cam + 0x88, sizeof(g_baseRows));
+            if (aim > 0.0f) AimAtPrince(cam, base, target, aim);
+            memcpy(pos, target, sizeof(target));
             g_cam = cam;
             memcpy(g_base, base, sizeof(g_base));
             memcpy(g_out, pos, sizeof(g_out));
