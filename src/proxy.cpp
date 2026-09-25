@@ -294,6 +294,8 @@ static bool EnsureShadowTexture(IDirect3DDevice9* dev, Shadow& sh, const D3DSURF
 
 static bool g_loggedSubst, g_loggedWater, g_loggedLinear;
 static bool g_enabled = true;  // toggled with F10
+static int g_dumps;  // render targets written by the current F8 capture
+extern char g_iniPath[MAX_PATH];
 static bool g_verbose;  // [debug] verbose: menu tracing and per-frame statistics in popfix.log
 
 // Per-interval statistics of small render-target textures sampled while drawing
@@ -352,7 +354,20 @@ static unsigned BeginDraw(IDirect3DDevice9* dev)
             continue;
         }
         UINT w, h;
-        if (!RenderTargetTextureSize(t, w, h) || w >= g_curRTWidth) continue;  // not an upscaled buffer
+        if (!RenderTargetTextureSize(t, w, h)) continue;
+        if (w > g_curRTWidth) {
+            // Downsampling a render target (the glow chain 0x670d70: screen -> 256
+            // -> 128 ... -> 8). With point sampling every 2:1 step reads exactly on
+            // a texel border and picks one side, so each level shifts by half a
+            // texel; over five levels the glow ends up far up-left of its source.
+            // Linear filtering averages both sides and keeps it centred.
+            if (!g_enabled || (g_magFilter[s] != D3DTEXF_POINT && g_minFilter[s] != D3DTEXF_POINT)) continue;
+            o_SetSamplerState(dev, s, D3DSAMP_MAGFILTER, D3DTEXF_LINEAR);
+            o_SetSamplerState(dev, s, D3DSAMP_MINFILTER, D3DTEXF_LINEAR);
+            mask |= 1u << s;
+            continue;
+        }
+        if (w == g_curRTWidth) continue;  // not an upscaled buffer
         if (!g_enabled) { CountStat(w, h, STAT_OFF); continue; }
 
         Shadow* sh = FindShadow(t);
@@ -435,7 +450,12 @@ extern "C" void __cdecl QuadAdjust(float* c)
 {
     float s = g_quadScale;
     bool scaled = s != 1.0f && c[2] <= 513.0f && c[3] <= 513.0f;
-    if (g_capture) Log("cap: quad %.1f,%.1f - %.1f,%.1f%s", c[0], c[1], c[2], c[3], scaled ? " (scaled)" : "");
+    if (g_capture) {
+        Log("cap: quad %.1f,%.1f - %.1f,%.1f%s", c[0], c[1], c[2], c[3], scaled ? " (scaled)" : "");
+        // c[4] colour, then four texture coordinate sets of (u0, v0, u1, v1)
+        Log("cap:   uv %.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f | %.5f %.5f %.5f %.5f",
+            c[5], c[6], c[7], c[8], c[9], c[10], c[11], c[12], c[13], c[14], c[15], c[16], c[17], c[18], c[19], c[20]);
+    }
     if (scaled)
         for (int i = 0; i < 4; i++) c[i] *= s;
 }
@@ -603,12 +623,26 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
 {
     static unsigned frames;
     if (GetAsyncKeyState(VK_F10) & 1) {
-        g_enabled = !g_enabled;
-        Log("F10: fix %s", g_enabled ? "ON" : "OFF");
+        if (GetAsyncKeyState(VK_CONTROL) < 0) {
+            // Ctrl+F10: the full-screen blur effect on / off, for comparison.
+            unsigned char* fn = (unsigned char*)0x00670710;
+            if (fn[0] == 0x83 || fn[0] == 0xC3) {
+                DWORD prot;
+                VirtualProtect(fn, 1, PAGE_EXECUTE_READWRITE, &prot);
+                fn[0] = fn[0] == 0xC3 ? 0x83 : 0xC3;
+                VirtualProtect(fn, 1, prot, &prot);
+                FlushInstructionCache(GetCurrentProcess(), fn, 1);
+                Log("Ctrl+F10: blur effect %s", fn[0] == 0xC3 ? "OFF" : "ON");
+            }
+        } else {
+            g_enabled = !g_enabled;
+            Log("F10: fix %s", g_enabled ? "ON" : "OFF");
+        }
     }
     if (g_capture > 0 && --g_capture == 0) Log("cap: ---- end of frame capture");
     if (GetAsyncKeyState(VK_F8) & 1) {
         g_capture = 2;  // the frame after this Present
+        g_dumps = 0;
         Log("cap: ---- F8 frame capture");
     }
     if (++frames == 300) {
@@ -728,6 +762,38 @@ static HRESULT STDMETHODCALLTYPE hk_DrawPrimitive(IDirect3DDevice9* dev, D3DPRIM
     return hr;
 }
 
+// F8 capture with [debug] verbose=1: writes the enlarged blur targets after each
+// draw into them as raw BGRA files (popfix_rt_<n>_<w>x<h>.raw) for analysis.
+static void DumpRenderTarget(IDirect3DDevice9* dev)
+{
+    if (!g_verbose || g_dumps >= 40) return;
+    IDirect3DSurface9* rt = nullptr;
+    if (FAILED(dev->GetRenderTarget(0, &rt)) || !rt) return;
+    D3DSURFACE_DESC d;
+    rt->GetDesc(&d);
+    IDirect3DSurface9* sys = nullptr;
+    if (d.Width <= 2048 && d.Format == D3DFMT_A8R8G8B8 &&
+        SUCCEEDED(dev->CreateOffscreenPlainSurface(d.Width, d.Height, d.Format, D3DPOOL_SYSTEMMEM, &sys, nullptr)) &&
+        SUCCEEDED(dev->GetRenderTargetData(rt, sys))) {
+        D3DLOCKED_RECT lr;
+        if (SUCCEEDED(sys->LockRect(&lr, nullptr, D3DLOCK_READONLY))) {
+            char path[MAX_PATH];
+            strcpy(path, g_iniPath);
+            char* slash = strrchr(path, '\\');
+            if (slash) sprintf(slash + 1, "popfix_rt_%d_%ux%u.raw", g_dumps, d.Width, d.Height);
+            if (FILE* f = fopen(path, "wb")) {
+                for (UINT y = 0; y < d.Height; y++) fwrite((BYTE*)lr.pBits + y * lr.Pitch, 4, d.Width, f);
+                fclose(f);
+                Log("cap: render target %p dumped to %s", rt, path);
+                g_dumps++;
+            }
+            sys->UnlockRect();
+        }
+    }
+    if (sys) sys->Release();
+    rt->Release();
+}
+
 static HRESULT STDMETHODCALLTYPE hk_DrawIndexedPrimitive(IDirect3DDevice9* dev, D3DPRIMITIVETYPE t, INT bv, UINT mi,
                                                          UINT nv, UINT si, UINT n)
 {
@@ -735,6 +801,7 @@ static HRESULT STDMETHODCALLTYPE hk_DrawIndexedPrimitive(IDirect3DDevice9* dev, 
     unsigned m = BeginDraw(dev);
     HRESULT hr = o_DrawIndexedPrimitive(dev, t, bv, mi, nv, si, n);
     if (m) EndDraw(dev, m);
+    if (g_capture) DumpRenderTarget(dev);
     return hr;
 }
 
@@ -783,7 +850,7 @@ static float g_menuCamUp = 6.25f;
 static float g_menuCamSide = 0.0f;
 static char g_gameDir[MAX_PATH];  // with trailing backslash
 static bool g_loggedRefract;
-static char g_iniPath[MAX_PATH];
+char g_iniPath[MAX_PATH];
 
 static HRESULT STDMETHODCALLTYPE hk_SetVertexShaderConstantF(IDirect3DDevice9* dev, UINT start, const float* data,
                                                              UINT count)
