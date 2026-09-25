@@ -278,6 +278,10 @@ WORD g_largeSpeed;
 WORD g_lastLeft, g_lastRight;
 
 int g_loggedMotorCalls;
+// Confirmation pulses (Gamepad_Pulse): count short buzzes from g_pulseStart.
+DWORD g_pulseStart;
+int g_pulseCount;
+const DWORD kPulseOn = 120, kPulsePeriod = 240;
 
 void UpdateMotors();
 
@@ -335,7 +339,13 @@ void UpdateMotors()
         Log("vibration: blocked (option %d, pad %d, foreground %d)", *g_vibrationEnabled, g_padConnected,
             GameInForeground());
     }
-    SetMotors(active && largeOn ? g_largeSpeed : 0, active && smallOn ? 0xFFFF : 0);
+    // Our own confirmation pulses do not depend on the game's vibration option.
+    DWORD t = now - g_pulseStart;
+    bool pulse = g_pulseCount > 0 && t < g_pulseCount * kPulsePeriod && t % kPulsePeriod < kPulseOn &&
+                 g_padConnected && GameInForeground();
+    if (g_pulseCount > 0 && t >= g_pulseCount * kPulsePeriod) g_pulseCount = 0;
+    if (pulse) SetMotors(0x8000, 0x8000);
+    else SetMotors(active && largeOn ? g_largeSpeed : 0, active && smallOn ? 0xFFFF : 0);
 }
 
 bool IsEmptyCall(DWORD site)
@@ -443,5 +453,12 @@ bool Gamepad_Read(XINPUT_GAMEPAD* pad)
 }
 
 void Gamepad_BlockGame(bool block) { g_blockGame = block; }
+
+void Gamepad_Pulse(int count)
+{
+    g_pulseStart = GetTickCount();
+    g_pulseCount = count;
+    UpdateMotors();
+}
 
 void Gamepad_SetPromptMode(int mode) { g_promptMode = mode; }

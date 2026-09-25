@@ -33,7 +33,8 @@
 //   Y / P                freeze the world (the main loop's pause flag 0xaf4498,
 //                        which also pauses the game behind the pause menu)
 //   X / F6, B / F7       store the free camera as [menus] camera_start / camera_end
-//                        (Ctrl+F6 / Ctrl+F7 clear them)
+//                        (Ctrl+F6 / Ctrl+F7 clear them); the pad buzzes once
+//                        for the start, twice for the end, three times when cleared
 // The sign conventions of the I/J rows are taken from the camera when the free
 // camera starts, so the view does not flip whatever handedness the engine uses.
 
@@ -445,6 +446,7 @@ void SavePose(int which, bool clear)
     }
     WritePrivateProfileStringA("menus", key, v, g_iniPath);
     Log("menu camera: %s %s", key, clear ? "cleared" : v);
+    Gamepad_Pulse(clear ? 3 : which + 1);  // start: one buzz, end: two, cleared: three
 }
 
 void LoadPose(const char* key, Pose* p)

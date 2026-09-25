@@ -78,9 +78,16 @@ Prince without a jump.
 The menu picture and the end of that flight can also be placed freely: in the main menu
 (or anywhere else) turn on the free camera, fly to the spot and press **F6 / X** to use
 it as the menu picture or **F7 / B** to use it as the flight's end; Ctrl+F6 / Ctrl+F7
-return to the default. The positions are stored in `popfix.ini`. The flight then runs
+return to the default. The controller buzzes once for the menu picture, twice for the end
+and three times when cleared. The positions are stored in `popfix.ini`. The flight then runs
 from the menu picture to the end picture; the camera stays there while the Prince is on
 the balcony and blends over to the game's camera when it moves on.
+
+### Menus and texts on wide screens
+Menus, texts and the HUD were laid out for 4:3 and stretched over the whole width. They
+keep their 4:3 proportions now, centred on the screen, like on the consoles; full-screen
+elements (fades, cutscene bars) still cover the whole screen. `[ui] scale` makes them
+smaller or larger, `[ui] aspect=0` restores the stretched layout.
 
 ### Videos
 The videos are shown with their correct aspect ratio instead of stretched. Upscaled
@@ -121,6 +128,8 @@ file is the default.
 | `[post] blur_radius` | `auto` | blur width, 1 = original, auto = like an upscaling emulator |
 | `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
+| `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
+| `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
 | `[menus] camera_start` / `camera_end` | empty | menu picture / end of the new-game flight (`x y z yaw pitch`), stored with the free camera |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |

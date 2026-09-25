@@ -159,6 +159,22 @@ bit 3 (`0x716c50`), and the hover highlight follows the UI cursor (manager `+0x1
 Element: shown byte `+0x24`, enabled flag bit 1 of `+100`, focus / unfocus in vtable
 slots 3 / 4, neighbour links from `+0x54` (all empty in the PC page data).
 
+**2D layer (`ui.cpp`):** menus, texts and the HUD are drawn as pre-transformed quads
+(FVF `0x144`, XYZRHW + diffuse + 1 texture set, stride 28) in back buffer pixels,
+converted from the virtual 640×480 space with the screen size at `0xae1614` /
+`0xae1618`. The vertex shader constants of that pass (an unused projection) do not
+affect them. All menu and text quads go through two cdecl helpers:
+`0x661970` textured quad (x0, y0, x1, y1, u0, v0, u1, v1, 4 colours, angle, flags;
+callers include the widgets at `0x71076e`, `0x711a1d`, `0x711a76` and the save point
+images) and `0x661790` coloured quad (x, y, width and height as fractions of the
+screen, colour, flags). Both are detoured; x is moved towards the screen centre by
+4:3 / aspect × `[ui] scale`, y by `[ui] scale`. Quads covering the whole width
+(fades, letterbox bars, full-screen images) are left alone. The mouse needs no
+change: it moves the UI cursor by relative DirectInput deltas in the virtual space,
+and the cursor is drawn through the same helpers. Other pre-transformed draws (quad
+helper `0x66b300` of the post effects, video quad `0x674d30`, the screen distortion
+`0x6714b0`) are not affected.
+
 **Menu pad (`menupad.cpp`):** reads XInput and feeds the page through the key entry
 points: D-pad / left stick = arrow keys (with key repeat), A = Enter, B / Y = Escape.
 Because the PC pages have no neighbour links, arrow keys that the focused widget does
