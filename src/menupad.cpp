@@ -69,15 +69,29 @@ bool Focusable(char* elem)
     return type == 1 || type == 2 || type == 3 || type == 7 || type == 8 || type == 10;
 }
 
-bool Center(char* elem, int& x, int& y)
+bool Rect(char* elem, short* r)  // x0, x1, y0, y1
 {
     char* w = *(char**)(elem + 0x2c);
-    short r[4] = { 0, 0, 0, 0 };
+    r[0] = r[1] = r[2] = r[3] = 0;
     ((WidgetRect_t)(*(DWORD**)w)[4])(w, r);
-    if (r[1] <= r[0] || r[3] <= r[2]) return false;
+    return r[1] > r[0] && r[3] > r[2];
+}
+
+bool Center(char* elem, int& x, int& y)
+{
+    short r[4];
+    if (!Rect(elem, r)) return false;
     x = (r[0] + r[1]) / 2;
     y = (r[2] + r[3]) / 2;
     return true;
+}
+
+// Distance between the ranges [a0, a1] and [b0, b1], 0 if they overlap.
+int Gap(int a0, int a1, int b0, int b1)
+{
+    if (b0 > a1) return b0 - a1;
+    if (a0 > b1) return a0 - b1;
+    return 0;
 }
 
 void SetFocus(char* page, char* elem)
@@ -90,26 +104,30 @@ void SetFocus(char* page, char* elem)
 }
 
 // Nearest focusable element from the focused one in a direction (VK arrow).
+// Nearest focusable element in direction vk. "Across" is the gap between the
+// element rectangles, not between their centres: menu entries are left-aligned
+// texts of different widths, and a long entry's centre lies far to the side.
 char* Neighbour(char* page, DWORD vk)
 {
     char* from = *(char**)(page + 0x40);
-    int fx = 320, fy = 240;
-    if (from) Center(from, fx, fy);
+    short fr[4] = { 320, 320, 240, 240 };
+    if (from) Rect(from, fr);
+    int fx = (fr[0] + fr[1]) / 2, fy = (fr[2] + fr[3]) / 2;
     char* best = nullptr;
     double bestCost = 1e30;
     for (char** it = *(char***)(page + 0x28); it && it < *(char***)(page + 0x2c); it++) {
         char* e = *it;
-        int x, y;
-        if (e == from || !Focusable(e) || !Center(e, x, y)) continue;
-        int dx = x - fx, dy = y - fy, along, across;
+        short r[4];
+        if (e == from || !Focusable(e) || !Rect(e, r)) continue;
+        int dx = (r[0] + r[1]) / 2 - fx, dy = (r[2] + r[3]) / 2 - fy, along, across;
         switch (vk) {
-        case VK_UP: along = -dy; across = dx; break;
-        case VK_DOWN: along = dy; across = dx; break;
-        case VK_LEFT: along = -dx; across = dy; break;
-        default: along = dx; across = dy; break;
+        case VK_UP: along = -dy; across = Gap(fr[0], fr[1], r[0], r[1]); break;
+        case VK_DOWN: along = dy; across = Gap(fr[0], fr[1], r[0], r[1]); break;
+        case VK_LEFT: along = -dx; across = Gap(fr[2], fr[3], r[2], r[3]); break;
+        default: along = dx; across = Gap(fr[2], fr[3], r[2], r[3]); break;
         }
         if (along <= 0) continue;
-        double cost = along + 2.0 * (across < 0 ? -across : across);
+        double cost = along + 2.0 * across;
         if (cost < bestCost) { bestCost = cost; best = e; }
     }
     return best;

@@ -295,8 +295,9 @@ are merged into a "SuperWorld", so the world is recognised when its `.wow` file 
 parsed: the parser `0x68bc80` (passed as a callback at `0x6780ca` and `0x68c1c2`) is
 wrapped and returns the world, whose name is at `+0x1d8`. While `menu3D` is loaded
 and the camera is at its menu position, `0x437f70` is detoured to move the camera
-forward along K and up along the world Z axis; the offset fades out over the first
-8 units when a new game starts the camera flight.
+forward along K, sideways and up along the world Z axis; when a new game starts the
+camera flight, the offset fades out within 0.6 s (fading it over the flight distance
+moved the camera off the path the game aims at the Prince).
 
 **Free camera:** the same detour writes a free-flying camera (yaw/pitch, position)
 into the main view's camera struct; the signs of the I/J rows are taken from the

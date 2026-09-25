@@ -23,7 +23,7 @@
 // loaded after it. The menu camera (Camera02 of menu3D) is static, so the offset
 // applies while menu3D has been loaded and the camera is at its position. When a
 // new game starts, the camera flies from there to the Prince; the offset fades
-// out over the first kFadeDistance units of that flight instead of snapping back.
+// out within kFadeTime of the camera leaving the menu position.
 //
 // Free camera: the same hook replaces the main view's camera matrix (display
 // *(0x9ec518), camera at +0xcc) with a free-flying one. Back (View) or F9
@@ -53,7 +53,8 @@ const DWORD kParseWorldPushes[] = { 0x006780c9, 0x0068c1c1 };  // push 0x68bc80
 const DWORD kWorldName = 0x1d8;
 const char kMenuWorld[] = "menu3D";
 const float kMenuCamPos[3] = { -83.59f, 1.39f, -2.66f };  // Camera02 in menu3D
-const float kFadeDistance = 8.0f;
+const float kFadeDistance = 8.0f;  // cameras further from the menu position get no offset
+const float kFadeTime = 600.0f;     // ms
 
 typedef void(__cdecl* ViewFromCamera_t)(BYTE* cam);
 ViewFromCamera_t g_viewFromCamera;  // trampoline
@@ -234,14 +235,22 @@ BYTE* __cdecl ParseWorldHook(void* data)
     return world;
 }
 
-// 1 at the menu camera position, fading to 0 kFadeDistance units away.
+// 1 while the camera rests at the menu position. When it leaves (new game), the
+// offset fades out over kFadeTime: fading it over the flight distance instead
+// moved the camera off the path the game aims at the Prince, pushing him out of
+// the picture. Cameras far from the menu position get no offset.
 float MenuCameraWeight(const float* pos)
 {
+    static DWORD leftTick;  // when the camera left the menu position, 0 = still there
     if (!g_menuLoaded) return 0.0f;
     float d2 = 0.0f;
     for (int i = 0; i < 3; i++) d2 += (pos[i] - kMenuCamPos[i]) * (pos[i] - kMenuCamPos[i]);
+    if (d2 < 0.05f * 0.05f) { leftTick = 0; return 1.0f; }
     if (d2 >= kFadeDistance * kFadeDistance) return 0.0f;
-    float w = 1.0f - sqrtf(d2) / kFadeDistance;
+    if (!leftTick) leftTick = GetTickCount();
+    float t = (GetTickCount() - leftTick) / kFadeTime;
+    if (t >= 1.0f) return 0.0f;
+    float w = 1.0f - t;
     return w * w * (3.0f - 2.0f * w);  // smoothstep
 }
 
