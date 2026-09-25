@@ -205,6 +205,7 @@ static UINT g_bbHeight;  // backbuffer height of the game device
 static UINT g_bigRT;     // size of the enlarged blur targets (0 = off), see "post-effect resolution"
 static int g_numBig;
 static UINT g_bigRTMaxFactor = 4;  // [post] blur_resolution in popfix.ini (1 = off)
+static float g_blurRadius;          // [post] blur_radius: tap distance relative to the original, 0 = auto
 
 struct Shadow {
     IDirect3DBaseTexture9* smallTex;   // identity key, not ref-counted
@@ -497,6 +498,17 @@ extern "C" void __cdecl BlurAdjust(DWORD* a)  // a[0] = first argument
         Log("cap: blur %.0fx%.0f <- %.0fx%.0f extents %.3f %.3f%s", f[1], f[2], f[4], f[5], f[9], f[10],
             dst ? " (dst scaled)" : "");
     if (dst) { f[1] *= s; f[2] *= s; }
+    // Tap distance: the pass steps extent / srcSize in texture space, i.e. one
+    // texel of the original 512 target, however large the target really is. An
+    // upscaling emulator steps one texel of its enlarged target instead, which
+    // keeps the soft-focus overlay tight (the original's wide halo, slightly
+    // up-left of every object, is what reads as ghosting). blur_radius scales
+    // the step: 1 = original, auto = one texel of the enlarged target.
+    if (dst && IsBigTex((void*)a[3])) {
+        float r = g_blurRadius > 0.0f ? g_blurRadius : 1.0f / s;
+        f[4] /= r;
+        f[5] /= r;
+    }
 }
 
 extern "C" __declspec(naked) void BlurHook()
@@ -531,6 +543,56 @@ static void* JmpHook(DWORD addr, const unsigned char* prologue, size_t len, void
     return tramp;
 }
 
+// The full-screen soft-focus effect (0x670710) blurs a copy of the frame
+// (texture *(effect +4) +0x78) and lays it over the finished frame at 41 %. The
+// copy is made before the glow is added, so on glowing surfaces the overlay
+// shows the dark, unlit picture - a grey ghost inside every glow. With
+// [post] blur_after_glow=1 the copy is refreshed from the current back buffer
+// (glow included) right before the effect runs.
+static bool g_blurAfterGlow = true;
+static bool g_blurOff;  // Ctrl+F10
+extern "C" void* g_blurEffectOriginal = nullptr;
+
+extern "C" int __cdecl BlurEffectPre(BYTE* effect)
+{
+    if (g_blurOff) return 0;
+    if (!g_blurAfterGlow || !g_enabled) return 1;
+    __try {
+        IDirect3DTexture9* tex = *(IDirect3DTexture9**)(*(BYTE**)(effect + 4) + 0x78);
+        D3DSURFACE_DESC d;
+        if (!tex || FAILED(tex->GetLevelDesc(0, &d)) || !(d.Usage & D3DUSAGE_RENDERTARGET)) return 1;
+        IDirect3DDevice9* dev = nullptr;
+        if (FAILED(tex->GetDevice(&dev))) return 1;
+        IDirect3DSurface9 *rt = nullptr, *dst = nullptr;
+        if (SUCCEEDED(dev->GetRenderTarget(0, &rt)) && SUCCEEDED(tex->GetSurfaceLevel(0, &dst))) {
+            D3DSURFACE_DESC rd;
+            rt->GetDesc(&rd);
+            if (rd.Height == g_bbHeight) o_StretchRect(dev, rt, nullptr, dst, nullptr, D3DTEXF_LINEAR);
+        }
+        if (dst) dst->Release();
+        if (rt) rt->Release();
+        dev->Release();
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+    }
+    return 1;
+}
+
+extern "C" __declspec(naked) void BlurEffectHook()
+{
+    __asm {
+        push ecx
+        push ecx
+        call BlurEffectPre
+        add esp, 4
+        pop ecx
+        test eax, eax
+        jz skip
+        jmp dword ptr [g_blurEffectOriginal]
+    skip:
+        ret
+    }
+}
+
 static void InstallQuadHook()
 {
     static bool done;
@@ -547,6 +609,9 @@ static void InstallQuadHook()
     g_quadOriginal = JmpHook(0x0066b300, quadPrologue, sizeof(quadPrologue), (void*)QuadHook);
     g_blurOriginal = JmpHook(0x0066b540, blurPrologue, sizeof(blurPrologue), (void*)BlurHook);
     Log("post blur: blur targets at %u x %u", g_bigRT, g_bigRT);
+    static const unsigned char effectPrologue[] = { 0x83, 0xEC, 0x30, 0x53, 0x55 };  // sub esp,0x30; push ebx; push ebp
+    g_blurEffectOriginal = JmpHook(0x00670710, effectPrologue, sizeof(effectPrologue), (void*)BlurEffectHook);
+    if (g_blurEffectOriginal && g_blurAfterGlow) Log("post blur: soft focus uses the frame with glow");
 }
 
 // [post] blur=0: skip the full-screen blur effect (render method 0x670710 of the
@@ -626,7 +691,10 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         if (GetAsyncKeyState(VK_CONTROL) < 0) {
             // Ctrl+F10: the full-screen blur effect on / off, for comparison.
             unsigned char* fn = (unsigned char*)0x00670710;
-            if (fn[0] == 0x83 || fn[0] == 0xC3) {
+            if (g_blurEffectOriginal) {
+                g_blurOff = !g_blurOff;
+                Log("Ctrl+F10: blur effect %s", g_blurOff ? "OFF" : "ON");
+            } else if (fn[0] == 0x83 || fn[0] == 0xC3) {
                 DWORD prot;
                 VirtualProtect(fn, 1, PAGE_EXECUTE_READWRITE, &prot);
                 fn[0] = fn[0] == 0xC3 ? 0x83 : 0xC3;
@@ -1106,6 +1174,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             float f = (float)atof(v);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;
             if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
+            GetPrivateProfileStringA("post", "blur_radius", "auto", v, sizeof(v), g_iniPath);
+            g_blurRadius = _stricmp(v, "auto") == 0 ? 0.0f : (float)atof(v);
+            g_blurAfterGlow = GetPrivateProfileIntA("post", "blur_after_glow", 1, g_iniPath) != 0;
             UINT k = GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
             g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
             GetPrivateProfileStringA("menus", "camera_forward", "3.5", v, sizeof(v), g_iniPath);

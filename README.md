@@ -19,11 +19,13 @@ Xbox version, but two things made it look flat, milky and blocky:
 Water colour and specular strength were already identical to the Xbox and are left alone.
 The refraction strength can be raised further in `popfix.ini` (default 1.5 × Xbox).
 
-### Sharp motion blur
-The zoom/speed blur (e.g. when the Prince runs along walls or uses the dagger) is also
-built from 512×512 render targets. Those targets are enlarged up to 4× (limited by the
-screen height), so the blur stays smooth instead of pixelated at 1440p/4K. The blur can
-also be switched off completely in `popfix.ini`.
+### Soft focus without ghosting
+The game lays a blurred copy of the frame over the picture (a soft-focus look), built
+from 512×512 render targets. On PC it was pixelated, and – as on PS2 and Xbox at their
+native resolution – it left a wide halo slightly up-left of every object plus a grey
+ghost inside every glow. The targets are now enlarged up to 4×, the blur keeps the width
+an upscaling emulator gives it, and the blurred copy includes the glow. Each part can be
+switched in `popfix.ini`; `blur=0` removes the effect, Ctrl+F10 toggles it in game.
 
 ### Full controller support
 Any XInput controller (Xbox One/Series/Elite, …) works everywhere – menus, gameplay,
@@ -108,7 +110,9 @@ file is the default.
 |---|---|---|
 | `[water] refraction` | `1.5` | refraction strength, 1.0 = Xbox |
 | `[post] blur_resolution` | `4` | size of the blur targets, 1 = original 512×512, up to 4× |
-| `[post] blur` | `1` | 0 disables the zoom/speed blur |
+| `[post] blur` | `1` | 0 disables the soft-focus blur |
+| `[post] blur_radius` | `auto` | blur width, 1 = original, auto = like an upscaling emulator |
+| `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |

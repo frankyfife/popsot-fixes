@@ -86,22 +86,44 @@ The water pass only runs when the video option *Water* is on (config struct
 (`+0xf0` bits 0/1, filled from `D3DCAPS9` in `0x662e60`). Otherwise a flat fallback
 mesh is drawn.
 
-## Motion blur
+## Soft focus and glow
 
-The zoom/speed blur (render method `0x670710`, effect vtable `0x7b18e4`) copies the back
-buffer into 512×512 `A8R8G8B8` render targets (`StretchRect`), blurs half of that area
-with the blur pass `0x66b540` and composites the result over the screen. The blur pass
-(thiscall `dst, dstW, dstH, src, srcW, srcH, kernel, taps, ?, uExtent, vExtent`) draws
-a quad of `dstW × dstH` pixels through the quad helper `0x66b300` (`x0, y0, x1, y1` in
-target pixels); `uExtent` / `vExtent` are the texture-space fractions it samples, and
-the tap step is `extent / srcSize`.
+**Soft focus** (render method `0x670710`, effect vtable `0x7b18e4`): the frame copy
+(texture `*(effect +4) +0x78`, a 512×512 `A8R8G8B8` render target) is drawn into
+target A, downsampled 2:1 into B, blurred into a quarter of A and back into half of B
+with the blur pass `0x66b540`, and laid over the finished frame with alpha 0x68 (41 %).
+The blur pass (thiscall `dst, dstW, dstH, src, srcW, srcH, kernel, taps, ?, uExtent,
+vExtent`) draws a quad of `dstW × dstH` pixels through the quad helper `0x66b300`
+(`x0, y0, x1, y1` in target pixels, texture coordinates in four sets); `uExtent` /
+`vExtent` are the texture-space fractions it samples, the kernel `0x7b18fc` has three
+taps (−1,−1), (+1,0), (0,+1) with weight 1/3, and the tap step is `extent / srcSize`.
 
-**Fix (`proxy.cpp`):** those render targets are created at up to 4× their size
-(`[post] blur_resolution`, limited by the back-buffer height). Pixel sizes that refer to
-an enlarged target are scaled to match – `StretchRect` rectangles, the quad helper's
-coordinates and the blur pass's destination size – while the texture-space extents stay
-unchanged, so the blur keeps its radius and only gains resolution. `[post] blur=0`
-turns the render method into a `ret`.
+**Glow** (`0x670d70`): a `StretchRect` copy of the frame is downsampled to 256, 128,
+64, 32, 16 and 8 (each level blurred twice) and the levels are added over the frame in
+pairs.
+
+Measured with dumps of every target (F8 capture with `[debug] verbose=1`): the chains
+themselves stay aligned within half a texel, but the soft-focus overlay is a wide
+blur (about 16 px at 4K, slightly up-left) and its copy is made before the glow is
+added – on glowing surfaces it lays the dark, unlit picture over the glow. Together
+this reads as a ghost around characters and inside lights. An upscaling emulator
+steps the kernel in texels of its enlarged targets, so the halo shrinks with the
+resolution.
+
+**Fix (`proxy.cpp`):**
+* The 512×512 render targets are created at up to 4× their size (`[post]
+  blur_resolution`, limited by the back-buffer height). Pixel sizes that refer to an
+  enlarged target are scaled to match – `StretchRect` rectangles, the quad helper's
+  coordinates and the blur pass's destination size – while the texture-space extents
+  stay unchanged.
+* `[post] blur_radius`: the blur pass's source size is divided by the radius, so the
+  tap step becomes one texel of the enlarged target (auto) or any fraction of the
+  original.
+* `[post] blur_after_glow`: `0x670710` is detoured; before it runs, the current back
+  buffer (glow included) is copied into its frame texture.
+* Render targets sampled while drawing into a smaller target are filtered linearly, so
+  2:1 steps do not pick one side of a texel border.
+* `[post] blur=0` turns the render method into a `ret`; Ctrl+F10 skips it at run time.
 
 ## Menus and input
 
