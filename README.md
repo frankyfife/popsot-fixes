@@ -60,8 +60,8 @@ Tutorial and menu hints name the controller buttons while a controller is connec
 ### Free camera
 Back (View) or F9 detaches the camera: left stick / WASD move, right stick / arrow keys
 look, LT / RT or Q / E move down / up, LB / Ctrl slow down, RB / Shift speed up, Y / P
-freezes the world. The game gets no input while the free camera is on (Start still
-pauses).
+freezes the world, F6 / X and F7 / B store the main menu's camera (see below). The game
+gets no input while the free camera is on (Start still pauses).
 
 ### Vibration
 The PC port removed force feedback completely, although the game still triggers it.
@@ -74,6 +74,13 @@ The main menu's 3D scene was built for 4:3; on wide screens its edges show. Like
 PS3 HD version, the menu camera is moved – forward and up here (adjustable in the main menu:
 F6 / F7, with Shift up / down, with Ctrl left / right). When a new game starts, the camera flies to the
 Prince without a jump.
+
+The menu picture and the end of that flight can also be placed freely: in the main menu
+(or anywhere else) turn on the free camera, fly to the spot and press **F6 / X** to use
+it as the menu picture or **F7 / B** to use it as the flight's end; Ctrl+F6 / Ctrl+F7
+return to the default. The positions are stored in `popfix.ini`. The flight then runs
+from the menu picture to the end picture; the camera stays there while the Prince is on
+the balcony and blends over to the game's camera when it moves on.
 
 ### Videos
 The videos are shown with their correct aspect ratio instead of stretched. Upscaled
@@ -115,6 +122,7 @@ file is the default.
 | `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
+| `[menus] camera_start` / `camera_end` | empty | menu picture / end of the new-game flight (`x y z yaw pitch`), stored with the free camera |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |

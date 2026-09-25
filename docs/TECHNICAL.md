@@ -303,6 +303,15 @@ turns so the Prince (≈ −103.2, −5.05, 1.0) stays where the game's flight s
 Passes of the main display from other positions (e.g. the origin) are ignored; the
 offset stops when the flight arrives and returns with the menu.
 
+`camera_start` / `camera_end` (`x y z yaw pitch`, stored from the free camera) replace
+the offset start and the game's end. The rows are then rebuilt from yaw/pitch without
+roll, keeping the engine's I/J signs. Position and view are interpolated by the same
+progress (the view with smoothstep; without an end pose it turns towards the game's
+view corrected for the Prince, in the first 15 % of the flight). The game's balcony
+camera stays at the flight's end while the Prince is on the balcony, so the end pose is
+held while it does. When it leaves, a camera within 3 units is blended over to in
+0.75 s; a farther one is a cut and is shown at once.
+
 **Free camera:** the same detour writes a free-flying camera (yaw/pitch, position)
 into the main view's camera struct; the signs of the I/J rows are taken from the
 camera when it starts. Game input is withheld by the `GetActionValue` and stick hooks.

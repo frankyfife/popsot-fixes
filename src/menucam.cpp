@@ -32,17 +32,21 @@
 //   LT / RT, Q / E       down / up  LB / RB, Ctrl / Shift     slow / fast (held)
 //   Y / P                freeze the world (the main loop's pause flag 0xaf4498,
 //                        which also pauses the game behind the pause menu)
+//   X / F6, B / F7       store the free camera as [menus] camera_start / camera_end
+//                        (Ctrl+F6 / Ctrl+F7 clear them)
 // The sign conventions of the I/J rows are taken from the camera when the free
 // camera starts, so the view does not flip whatever handedness the engine uses.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
+#include <stdio.h>
 #include <string.h>
 #include <math.h>
 #include "menucam.h"
 #include "gamepad.h"
 
 void Log(const char* fmt, ...);
+extern char g_iniPath[MAX_PATH];
 
 namespace {
 
@@ -99,16 +103,52 @@ void Normalize(float* v)
 }
 
 // Camera rows from yaw/pitch: forward f, right r = f x Z, up u = r x f.
-void FreeCamAxes(float* f, float* r, float* u)
+void Axes(float yaw, float pitch, float* f, float* r, float* u)
 {
-    f[0] = cosf(g_free.pitch) * cosf(g_free.yaw);
-    f[1] = cosf(g_free.pitch) * sinf(g_free.yaw);
-    f[2] = sinf(g_free.pitch);
+    f[0] = cosf(pitch) * cosf(yaw);
+    f[1] = cosf(pitch) * sinf(yaw);
+    f[2] = sinf(pitch);
     const float z[3] = { 0.0f, 0.0f, 1.0f };
     Cross(f, z, r);
     Normalize(r);
     Cross(r, f, u);
 }
+
+void FreeCamAxes(float* f, float* r, float* u) { Axes(g_free.yaw, g_free.pitch, f, r, u); }
+
+void YawPitch(const float* k, float* yaw, float* pitch)
+{
+    float f[3] = { k[0], k[1], k[2] };
+    Normalize(f);
+    *yaw = atan2f(f[1], f[0]);
+    *pitch = asinf(f[2] < -1.0f ? -1.0f : f[2] > 1.0f ? 1.0f : f[2]);
+}
+
+// Replaces the rows I, J, K of `cam` by a view along yaw/pitch without roll,
+// keeping the signs the engine uses for I and J.
+void WriteRows(BYTE* cam, float yaw, float pitch)
+{
+    float f[3], r[3], u[3];
+    Axes(yaw, pitch, f, r, u);
+    float* I = (float*)(cam + 0x88);
+    float* J = (float*)(cam + 0x98);
+    float* K = (float*)(cam + 0xa8);
+    float signI = Dot(I, r) < 0.0f ? -1.0f : 1.0f;
+    float signJ = Dot(J, u) < 0.0f ? -1.0f : 1.0f;
+    for (int i = 0; i < 3; i++) {
+        I[i] = signI * r[i];
+        J[i] = signJ * u[i];
+        K[i] = f[i];
+    }
+}
+
+// A camera placed with the free camera: [menus] camera_start / camera_end.
+struct Pose {
+    bool set;
+    float pos[3];
+    float yaw, pitch;
+};
+Pose g_startPose, g_endPose;
 
 BYTE* MainCamera()
 {
@@ -123,11 +163,7 @@ void StartFreeCam()
     __try {
         const float* I = (const float*)(cam + 0x88);
         const float* J = (const float*)(cam + 0x98);
-        const float* K = (const float*)(cam + 0xa8);
-        float f[3] = { K[0], K[1], K[2] };
-        Normalize(f);
-        g_free.yaw = atan2f(f[1], f[0]);
-        g_free.pitch = asinf(f[2] < -1.0f ? -1.0f : f[2] > 1.0f ? 1.0f : f[2]);
+        YawPitch((const float*)(cam + 0xa8), &g_free.yaw, &g_free.pitch);
         float ff[3], r[3], u[3];
         FreeCamAxes(ff, r, u);
         g_free.signI = Dot(I, r) < 0.0f ? -1.0f : 1.0f;
@@ -237,14 +273,6 @@ BYTE* __cdecl ParseWorldHook(void* data)
     return world;
 }
 
-// Where the main camera should be (false = leave it alone). In the menu the
-// camera rests at kMenuCamPos; we move it to g_start (forward, sideways, up).
-// When a new game starts, the game flies it forward and up to kFlightEnd (the
-// balcony camera) in about eight seconds. We follow that flight's progress s
-// (its position projected onto the line menu -> end) but interpolate from our
-// start instead of the menu position, so the camera travels on from where the
-// menu showed it, at the game's pace, and arrives exactly where the game's
-// flight ends; the viewing direction stays the game's.
 // Rotates v around the unit axis a by angle (Rodrigues).
 void Rotate(float* v, const float* a, float c, float sn)
 {
@@ -254,47 +282,9 @@ void Rotate(float* v, const float* a, float c, float sn)
     for (int i = 0; i < 3; i++) v[i] = v[i] * c + axv[i] * sn + a[i] * d * (1.0f - c);
 }
 
-// *aimWeight > 0: turn the camera so the Prince appears where the game's flight
-// shows him (our path runs higher, looking the game's way would lose him).
-bool MenuCameraTarget(const float* base, const float* k, float* out, float* aimWeight)
-{
-    *aimWeight = 0.0f;
-    static bool flightDone;
-    static float start[3];
-    if (!g_menuLoaded || (g_forward == 0.0f && g_up == 0.0f && g_side == 0.0f)) return false;
-    float d[3], e[3];
-    for (int i = 0; i < 3; i++) { d[i] = base[i] - kMenuCamPos[i]; e[i] = kFlightEnd[i] - kMenuCamPos[i]; }
-    if (Dot(d, d) < 0.05f * 0.05f) {
-        float right[3] = { k[1], -k[0], 0.0f };  // k x Z
-        Normalize(right);
-        for (int i = 0; i < 3; i++) start[i] = base[i] + g_forward * k[i] + g_side * right[i];
-        start[2] += g_up;
-        memcpy(out, start, sizeof(start));
-        flightDone = false;
-        return true;
-    }
-    if (flightDone) return false;
-    float s = Dot(d, e) / Dot(e, e);
-    float off[3];
-    for (int i = 0; i < 3; i++) off[i] = d[i] - s * e[i];
-    // The main display also renders passes from other positions (e.g. the
-    // origin); only positions on the flight path count.
-    if (Dot(off, off) > 4.0f * 4.0f || s < -0.2f) return false;
-    if (s >= 0.999f) {  // arrived: the game's camera takes over until the menu returns
-        flightDone = true;
-        return false;
-    }
-    if (s < 0.0f) s = 0.0f;
-    for (int i = 0; i < 3; i++) out[i] = start[i] + s * (kFlightEnd[i] - start[i]);
-    float w = s / 0.15f;  // the menu picture is kept; the aim comes in during the first part of the flight
-    if (w > 1.0f) w = 1.0f;
-    *aimWeight = w * w * (3.0f - 2.0f * w);
-    return true;
-}
-
-// Turns the camera rows I, J, K (+0x88, +0x98, +0xa8) so that the Prince, seen
-// from `from` by the game, is seen in the same place from `to`.
-void AimAtPrince(BYTE* cam, const float* from, const float* to, float weight)
+// Turns the viewing direction k so that the Prince, seen from `from` along k,
+// is seen in the same place from `to`.
+void AimAtPrince(float* k, const float* from, const float* to)
 {
     float a[3], b[3];
     for (int i = 0; i < 3; i++) { a[i] = kPrince[i] - from[i]; b[i] = kPrince[i] - to[i]; }
@@ -305,9 +295,164 @@ void AimAtPrince(BYTE* cam, const float* from, const float* to, float weight)
     float sn = sqrtf(Dot(axis, axis));
     if (sn < 1e-6f) return;
     for (int i = 0; i < 3; i++) axis[i] /= sn;
-    float angle = atan2f(sn, Dot(a, b)) * weight;
-    float c = cosf(angle), sa = sinf(angle);
-    for (int row = 0; row < 3; row++) Rotate((float*)(cam + 0x88 + row * 0x10), axis, c, sa);
+    float angle = atan2f(sn, Dot(a, b));
+    Rotate(k, axis, cosf(angle), sinf(angle));
+}
+
+bool Near(const float* a, const float* b, float dist)
+{
+    float d[3] = { a[0] - b[0], a[1] - b[1], a[2] - b[2] };
+    return Dot(d, d) < dist * dist;
+}
+
+// Where the main camera should be (false = leave it alone); *look = also turn
+// it to yaw/pitch. In the menu the camera rests at kMenuCamPos; we show it from
+// the start pose ([menus] camera_start) or moved by the offsets instead. When a
+// new game starts, the game flies it forward and up to kFlightEnd (the balcony
+// camera) in about eight seconds. We follow that flight's progress s (its
+// position projected onto the line menu -> end) but interpolate from our start
+// to our end (camera_end, or the game's end), so the camera travels on from
+// where the menu showed it, at the game's pace. The view turns from the start
+// view to the end view; without an end pose it turns to the game's view,
+// corrected so the Prince appears where the game's flight shows him (our path
+// runs elsewhere, looking the game's way would lose him). With an end pose the
+// camera stays there while the game's camera does (the balcony camera does not
+// move while the Prince is on the balcony); when the game's camera moves on we
+// blend over to it in 0.75 s, after a cut we leave it alone.
+bool MenuCameraTarget(const float* base, const float* k, float* out, bool* look, float* yaw, float* pitch)
+{
+    static bool flightDone, arrived, handover;
+    static float start[3], startYaw, startPitch;
+    static LARGE_INTEGER handoverStart;
+    *look = false;
+    if (!g_menuLoaded) return false;
+    if (!g_startPose.set && !g_endPose.set && g_forward == 0.0f && g_up == 0.0f && g_side == 0.0f) return false;
+    const float zero[3] = {};
+    if (Near(base, zero, 0.01f)) return false;  // the main display also renders passes from the origin
+    if (Near(base, kMenuCamPos, 0.05f)) {
+        if (g_startPose.set) {
+            memcpy(start, g_startPose.pos, sizeof(start));
+            startYaw = g_startPose.yaw;
+            startPitch = g_startPose.pitch;
+            *look = true;
+        } else {
+            float right[3] = { k[1], -k[0], 0.0f };  // k x Z
+            Normalize(right);
+            for (int i = 0; i < 3; i++) start[i] = base[i] + g_forward * k[i] + g_side * right[i];
+            start[2] += g_up;
+            YawPitch(k, &startYaw, &startPitch);
+        }
+        memcpy(out, start, sizeof(start));
+        *yaw = startYaw;
+        *pitch = startPitch;
+        flightDone = arrived = handover = false;
+        return true;
+    }
+    if (handover) {  // the game's camera moves on from the end: blend over to it
+        LARGE_INTEGER now, freq;
+        QueryPerformanceCounter(&now);
+        QueryPerformanceFrequency(&freq);
+        float t = (float)(now.QuadPart - handoverStart.QuadPart) / (float)freq.QuadPart / 0.75f;
+        if (t >= 1.0f) handover = false;
+        if (!handover) return false;
+        float w = t * t * (3.0f - 2.0f * t), gameYaw, gamePitch;
+        YawPitch(k, &gameYaw, &gamePitch);
+        for (int i = 0; i < 3; i++) out[i] = g_endPose.pos[i] + w * (base[i] - g_endPose.pos[i]);
+        float dy = gameYaw - g_endPose.yaw;
+        while (dy > 3.14159265f) dy -= 6.28318531f;
+        while (dy < -3.14159265f) dy += 6.28318531f;
+        *yaw = g_endPose.yaw + w * dy;
+        *pitch = g_endPose.pitch + w * (gamePitch - g_endPose.pitch);
+        *look = true;
+        return true;
+    }
+    if (flightDone) return false;
+    if (arrived) {  // camera_end: hold it while the game's camera stays at the end
+        if (!g_endPose.set) {  // cleared meanwhile
+            flightDone = true;
+            return false;
+        }
+        if (!Near(base, kFlightEnd, 0.1f)) {
+            flightDone = true;
+            // A camera moving on is blended over to; after a cut it is shown at once.
+            bool blend = Near(base, kFlightEnd, 3.0f);
+            Log("menu camera: the game's camera leaves the flight's end (%s)", blend ? "blending over" : "cut");
+            if (blend) {
+                handover = true;
+                QueryPerformanceCounter(&handoverStart);
+                return MenuCameraTarget(base, k, out, look, yaw, pitch);
+            }
+            return false;
+        }
+        memcpy(out, g_endPose.pos, sizeof(g_endPose.pos));
+        *look = true;
+        *yaw = g_endPose.yaw;
+        *pitch = g_endPose.pitch;
+        return true;
+    }
+    float d[3], e[3];
+    for (int i = 0; i < 3; i++) { d[i] = base[i] - kMenuCamPos[i]; e[i] = kFlightEnd[i] - kMenuCamPos[i]; }
+    float s = Dot(d, e) / Dot(e, e);
+    float off[3];
+    for (int i = 0; i < 3; i++) off[i] = d[i] - s * e[i];
+    if (Dot(off, off) > 4.0f * 4.0f || s < -0.2f) return false;  // not on the flight path
+    if (s >= 0.999f) {  // arrived
+        if (g_endPose.set) {
+            arrived = true;
+            return MenuCameraTarget(base, k, out, look, yaw, pitch);
+        }
+        flightDone = true;  // the game's camera takes over until the menu returns
+        return false;
+    }
+    if (s < 0.0f) s = 0.0f;
+    const float* end = g_endPose.set ? g_endPose.pos : kFlightEnd;
+    for (int i = 0; i < 3; i++) out[i] = start[i] + s * (end[i] - start[i]);
+    float endYaw, endPitch, w;
+    if (g_endPose.set) {
+        endYaw = g_endPose.yaw;
+        endPitch = g_endPose.pitch;
+        w = s * s * (3.0f - 2.0f * s);
+    } else {
+        float aimed[3] = { k[0], k[1], k[2] };
+        AimAtPrince(aimed, base, out);
+        YawPitch(aimed, &endYaw, &endPitch);
+        w = s / 0.15f;  // the menu picture is kept; the aim comes in during the first part of the flight
+        if (w > 1.0f) w = 1.0f;
+        w = w * w * (3.0f - 2.0f * w);
+    }
+    float dy = endYaw - startYaw;
+    while (dy > 3.14159265f) dy -= 6.28318531f;
+    while (dy < -3.14159265f) dy += 6.28318531f;
+    *yaw = startYaw + w * dy;
+    *pitch = startPitch + w * (endPitch - startPitch);
+    *look = true;
+    return true;
+}
+
+// Stores the free camera as the start or end pose (index 0 / 1) in popfix.ini,
+// or clears it.
+void SavePose(int which, bool clear)
+{
+    Pose& p = which ? g_endPose : g_startPose;
+    const char* key = which ? "camera_end" : "camera_start";
+    char v[96] = "";
+    p.set = !clear;
+    if (!clear) {
+        memcpy(p.pos, g_free.pos, sizeof(p.pos));
+        p.yaw = g_free.yaw;
+        p.pitch = g_free.pitch;
+        sprintf(v, "%.3f %.3f %.3f %.4f %.4f", p.pos[0], p.pos[1], p.pos[2], p.yaw, p.pitch);
+    }
+    WritePrivateProfileStringA("menus", key, v, g_iniPath);
+    Log("menu camera: %s %s", key, clear ? "cleared" : v);
+}
+
+void LoadPose(const char* key, Pose* p)
+{
+    char v[96];
+    GetPrivateProfileStringA("menus", key, "", v, sizeof(v), g_iniPath);
+    p->set = sscanf(v, "%f %f %f %f %f", &p->pos[0], &p->pos[1], &p->pos[2], &p->yaw, &p->pitch) == 5;
+    if (p->set) Log("menu camera: %s %s", key, v);
 }
 
 void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
@@ -347,10 +492,11 @@ void __cdecl ViewFromCameraHook(BYTE* cam)
         if (ours) memcpy(cam + 0x88, g_baseRows, sizeof(g_baseRows));  // undo our turn
         float base[3];
         memcpy(base, ours ? g_base : pos, sizeof(base));
-        float target[3], aim;
-        if (cam == MainCamera() && MenuCameraTarget(base, k, target, &aim)) {
+        float target[3], yaw, pitch;
+        bool look;
+        if (cam == MainCamera() && MenuCameraTarget(base, k, target, &look, &yaw, &pitch)) {
             memcpy(g_baseRows, cam + 0x88, sizeof(g_baseRows));
-            if (aim > 0.0f) AimAtPrince(cam, base, target, aim);
+            if (look) WriteRows(cam, yaw, pitch);
             memcpy(pos, target, sizeof(target));
             g_cam = cam;
             memcpy(g_base, base, sizeof(g_base));
@@ -390,6 +536,8 @@ void MenuCam_Install(float forward, float up, float side)
         VirtualProtect((void*)(push + 1), 4, prot, &prot);
     }
     g_installed = true;
+    LoadPose("camera_start", &g_startPose);
+    LoadPose("camera_end", &g_endPose);
     Log("menu camera: enabled, camera_forward %.2f camera_up %.2f camera_side %.2f", g_forward, g_up, g_side);
 }
 
@@ -408,6 +556,20 @@ void MenuCam_OnPresent(bool keys)
     }
     if (g_free.active) UpdateFreeCam();
     if (!keys) return;
+    if (g_free.active) {
+        // F6 / X and F7 / B store the free camera as the menu picture and as
+        // the end of the new-game flight; Ctrl+F6 / Ctrl+F7 clear them.
+        static bool xDown, bDown;
+        bool read = Gamepad_Read(&pad);
+        bool x = read && (pad.wButtons & XINPUT_GAMEPAD_X);
+        bool b = read && (pad.wButtons & XINPUT_GAMEPAD_B);
+        bool ctrl = GetAsyncKeyState(VK_CONTROL) < 0;
+        if ((x && !xDown) || (GetAsyncKeyState(VK_F6) & 1)) SavePose(0, ctrl && !x);
+        if ((b && !bDown) || (GetAsyncKeyState(VK_F7) & 1)) SavePose(1, ctrl && !b);
+        xDown = x;
+        bDown = b;
+        return;
+    }
     // F6 / F7 move the menu camera closer / further, with Shift down / up and
     // with Ctrl left / right.
     int dir = 0;
