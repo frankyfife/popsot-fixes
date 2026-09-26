@@ -459,7 +459,8 @@ int __fastcall MainMenuClick(void* handler, void* /*edx*/, char* elem)
 // sets it every frame from its keyframes through 0x713800 / 0x713820
 // (thiscall, copy x / y from a pair of shorts / from another position object);
 // both are replaced, and the copy is followed by our position for the two
-// buttons. Credits -> SpecialLoad -> Quit keep the column's spacing.
+// buttons. Credits -> SpecialLoad -> Quit keep the column's spacing. All
+// buttons of the page get SpecialLoad's text template (smaller text).
 const DWORD kPosFromXY = 0x00713800, kPosFromObject = 0x00713820;
 const unsigned char kPosFromXYCode[] = { 0x8B, 0x44, 0x24, 0x04, 0x66, 0x8B, 0x10, 0x66, 0x89, 0x51, 0x08 };
 const unsigned char kPosFromObjectCode[] = { 0x8B, 0x44, 0x24, 0x04, 0x66, 0x8B, 0x50, 0x08, 0x66, 0x89, 0x51, 0x08 };
@@ -517,6 +518,17 @@ void ArrangeMainMenu(char* page)
     if (g_posOverride[0].obj != special || g_posOverride[1].obj != quit) {
         Log("menu pad: level select moved into the menu column (%d,%d -> %d,%d)", *(short*)(special + 8),
             *(short*)(special + 10), x, y + step);
+    }
+    // One text size for the whole menu: the other buttons use larger templates
+    // ("B_Smaller_MenuItem" and others, widget +0xc: style and layout of the
+    // caption); SpecialLoad's "B_MenuItem" is the smaller, calmer one.
+    char* specialWidget = *(char**)(FindElement(page, "SpecialLoad") + 0x2c);
+    char* tpl = *(char**)(specialWidget + 0xc);
+    const char* names[] = { "NewGame", "LoadGame", "Options", "Credits", "Quit", "Back" };
+    for (const char* nm : names) {
+        char* e = FindElement(page, nm);
+        char* w = e ? *(char**)(e + 0x2c) : nullptr;
+        if (tpl && w && *(DWORD*)w == *(DWORD*)specialWidget) *(char**)(w + 0xc) = tpl;  // buttons only
     }
     g_posOverride[0] = { special, x, (short)(y + step) };
     g_posOverride[1] = { quit, x, (short)(y + 2 * step) };

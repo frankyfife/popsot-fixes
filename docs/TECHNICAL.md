@@ -199,6 +199,11 @@ position to the SpecialLoad and Quit buttons: SpecialLoad goes into the column a
 Credits and Quit one row further down, with the column's spacing. The override is
 dropped when the main menu is not the top page.
 
+The buttons use different templates for their caption (widget `+0xc`: text style and
+layout; `B_Smaller_MenuItem` and others, despite the name larger than SpecialLoad's
+`B_MenuItem`). All buttons of the main menu get SpecialLoad's template, so the menu
+has one, smaller text size.
+
 ## Console (Xbox) menus
 
 The PC build still contains the complete console front end: Jade AI scripts, compiled
