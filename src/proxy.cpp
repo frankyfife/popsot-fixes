@@ -921,7 +921,8 @@ static float g_menuCamSide = 0.0f;
 static bool g_uiAspect = true;  // [ui] aspect / scale, see ui.cpp
 static float g_uiScale = 1.0f;
 static char g_gameDir[MAX_PATH];
-static char g_texPack[MAX_PATH] = "d3d9.dll";  // [textures] pack, see texpack.cpp  // with trailing backslash
+static char g_texPack[MAX_PATH] = "d3d9.dll";  // [textures] pack / bloom, see texpack.cpp
+static bool g_texPackBloom = true;  // with trailing backslash
 static bool g_loggedRefract;
 char g_iniPath[MAX_PATH];
 
@@ -1199,6 +1200,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("ui", "scale", "1", v, sizeof(v), g_iniPath);
             g_uiScale = (float)atof(v);
             GetPrivateProfileStringA("textures", "pack", "d3d9.dll", g_texPack, sizeof(g_texPack), g_iniPath);
+            g_texPackBloom = GetPrivateProfileIntA("textures", "bloom", 1, g_iniPath) != 0;
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
         }
@@ -1208,7 +1210,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             Sound_SetForceEax(GetPrivateProfileIntA("sound", "eax", 1, g_iniPath) != 0);
             Sound_Install(g_gameDir);
             Video_Install(GetPrivateProfileIntA("video", "keep_aspect", 1, g_iniPath) != 0);
-            TexPack_Load(g_gameDir, g_texPack);
+            TexPack_Load(g_gameDir, g_texPack, g_texPackBloom);
             strcpy(slash + 1, "dx_gog.dll");
         }
         g_gog = LoadLibraryA(path);

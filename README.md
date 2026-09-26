@@ -137,6 +137,7 @@ file is the default.
 | `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
 | `[textures] pack` | `d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
+| `[textures] bloom` | `1` | keep the game's bloom (the HD pack would remove it) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
 | `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |

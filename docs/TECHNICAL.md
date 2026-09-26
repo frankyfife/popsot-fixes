@@ -354,6 +354,12 @@ Before our own system vtable hooks, the pack's `Direct3DCreate9` is called once
 so that it hooks `CreateDevice`; the chain is our hooks -> pack -> system d3d9,
 underneath GOG's wrapper.
 
+Pack options are baked into the DLL's `.popcfg` section (`PTEX`, 1, flags,
+`PCFG`). Flag bit 0 makes its `CreatePixelShader` hook replace the bloom shader
+`ABB07F2E` with one without bloom (set in the HD pack, clear in the 4K pack);
+the hook reads the flag on every call, so `[textures] bloom=1` clears it in
+memory after loading.
+
 ## Videos
 
 Videos are Bink 1 (`Video\*.int`, 640×448, cutscenes 640×346, one audio track per

@@ -16,6 +16,12 @@
 // its DllMain runs, and call its Direct3DCreate9 once before our own vtable
 // hooks. The chain is then: our hooks -> pack -> system d3d9, underneath GOG's
 // wrapper. Messages of the pack go to poptex_d3d9.log.
+//
+// Pack options are baked into the DLL's ".popcfg" section ("PTEX", version,
+// flags, "PCFG"). Flag bit 0 replaces the game's bloom pixel shader (ABB07F2E)
+// with one without bloom; the HD pack sets it, the 4K pack does not. The flag
+// is read whenever a pixel shader is created, so with [textures] bloom=1 we
+// clear it in memory after loading and the game keeps its bloom.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -70,9 +76,23 @@ int RenameImage(const wchar_t* from, const wchar_t* to)
     return changed;
 }
 
+// The pack's option flags (see above), or null.
+DWORD* PackFlags(HMODULE mod)
+{
+    BYTE* base = (BYTE*)mod;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    for (int i = 0; i < nt->FileHeader.NumberOfSections; i++, sec++) {
+        if (memcmp(sec->Name, ".popcfg", 7) != 0 || sec->Misc.VirtualSize < 16) continue;
+        DWORD* cfg = (DWORD*)(base + sec->VirtualAddress);
+        if (cfg[0] == 0x58455450 && cfg[1] == 1 && cfg[3] == 0x47464350) return &cfg[2];  // "PTEX", 1, flags, "PCFG"
+    }
+    return nullptr;
+}
+
 }  // namespace
 
-void TexPack_Load(const char* gameDir, const char* file)
+void TexPack_Load(const char* gameDir, const char* file, bool keepBloom)
 {
     if (!file || !*file) return;
     char path[MAX_PATH], data[MAX_PATH];
@@ -102,6 +122,15 @@ void TexPack_Load(const char* gameDir, const char* file)
     g_packCreate9 = GetProcAddress(g_pack, "Direct3DCreate9");
     Log("texture pack: %s loaded%s; its messages are in poptex_d3d9.log", file,
         renamed ? " (shown as POP.EXE while it started)" : "");
+    DWORD* flags = PackFlags(g_pack);
+    if (flags && keepBloom && (*flags & 1)) {
+        DWORD prot;
+        if (VirtualProtect(flags, 4, PAGE_READWRITE, &prot)) {
+            *flags &= ~1u;
+            VirtualProtect(flags, 4, prot, &prot);
+            Log("texture pack: its no-bloom shader is off, the game keeps its bloom ([textures] bloom=1)");
+        }
+    }
 }
 
 void TexPack_HookSystem()
