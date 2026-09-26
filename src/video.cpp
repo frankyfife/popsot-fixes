@@ -136,9 +136,9 @@ struct Format {
     int cr, cgu, cgv, cb, cy, y0;  // YUV -> RGB, 8.8 fixed point
 };
 
-void ConvertNV12(const BYTE* p, LONG pitch, const Format& f, UINT w, UINT h, BYTE* out)
+void ConvertNV12(const BYTE* p, LONG pitch, UINT codedHeight, const Format& f, UINT w, UINT h, BYTE* out)
 {
-    const BYTE* uvPlane = p + (size_t)pitch * f.codedHeight;
+    const BYTE* uvPlane = p + (size_t)pitch * codedHeight;
     for (UINT y = 0; y < h; y++) {
         const BYTE* py = p + (size_t)pitch * y;
         const BYTE* puv = uvPlane + (size_t)pitch * (y / 2);
@@ -173,7 +173,13 @@ bool ConvertSample(IMFSample* sample, const Format& f, UINT w, UINT h, BYTE* out
     if (p) {
         if (f.nv12) {
             if (pitch > 0) {
-                ConvertNV12(p, pitch, f, w, h, out);
+                // The decoder pads the height to a multiple of 16 (1384 -> 1392) and
+                // may announce that only with the first sample; the buffer length
+                // tells the real row count of the Y plane (Y + half-height UV).
+                DWORD total = 0;
+                buf->GetCurrentLength(&total);
+                UINT rows = (UINT)(total / ((size_t)pitch * 3 / 2));
+                ConvertNV12(p, pitch, rows >= h ? rows : f.codedHeight, f, w, h, out);
                 done = true;
             }
         } else {
