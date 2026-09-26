@@ -46,6 +46,13 @@ const DWORD kCurrentBink = 0x00af44c8;
 const DWORD kBackBufferW = 0x00ae1614, kBackBufferH = 0x00ae1618;
 const DWORD kBuildQuad = 0x00674d30;
 const DWORD kBuildQuadCalls[] = { 0x00674eeb, 0x00675485 };
+// Loading screens (poplogo, pop_out, ...) are opened ahead by 0x4137b0 (flags
+// 0x4000 / 0x6000, the handles kept in the loading screen object) and later
+// made the current video by 0x674d20 (cdecl void(bink): stores it at
+// 0xaf44c8); 0x675140 then skips BinkOpen and creates the texture. Their
+// replacement starts in our 0x674d20.
+const DWORD kSetCurrentBink = 0x00674d20;
+const unsigned char kSetCurrentBinkCode[] = { 0x8B, 0x44, 0x24, 0x04, 0xA3, 0xC8, 0x44, 0xAF, 0x00, 0xC3 };
 bool g_keepAspect = true;
 
 typedef void*(WINAPI* BinkOpen_t)(const char* name, DWORD flags);
@@ -77,11 +84,19 @@ struct Replacement {
     LONGLONG slotTime[kQueue];
     volatile LONG slotFull[kQueue];
     int readPos;
+    volatile LONG restart;  // Bink looped: the thread starts over (set by the game thread)
+    DWORD lastFrame;
 };
 const int kMaxReplacements = 4;
 Replacement g_rep[kMaxReplacements];
 Replacement* g_pending;               // opened, waiting for its texture
 IDirect3DBaseTexture9* g_videoTexture;  // texture of the current replacement
+
+// Videos opened ahead (not for playback): handle and file name.
+struct Preopened {
+    void* bink;
+    char name[MAX_PATH];
+} g_preopened[8];
 
 Replacement* Find(void* bink)
 {
@@ -252,6 +267,16 @@ DWORD WINAPI DecodeThread(void* param)
         reader = nullptr;
     }
     while (reader && !r.stop) {
+        if (r.restart) {  // back to the start; the game thread reset its read position
+            PROPVARIANT pos;
+            PropVariantInit(&pos);
+            pos.vt = VT_I8;
+            pos.hVal.QuadPart = 0;
+            reader->SetCurrentPosition(GUID_NULL, pos);
+            for (int i = 0; i < kQueue; i++) InterlockedExchange(&r.slotFull[i], 0);
+            writePos = 0;
+            InterlockedExchange(&r.restart, 0);
+        }
         if (!first && r.slotFull[writePos]) {  // queue full
             Sleep(1);
             continue;
@@ -260,9 +285,15 @@ DWORD WINAPI DecodeThread(void* param)
         LONGLONG time = 0;
         IMFSample* sample = nullptr;
         HRESULT hr = reader->ReadSample((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &stream, &flags, &time, &sample);
-        if (FAILED(hr) || (flags & (MF_SOURCE_READERF_ENDOFSTREAM | MF_SOURCE_READERF_ERROR))) {
+        if (FAILED(hr) || (flags & MF_SOURCE_READERF_ERROR)) {
             if (sample) sample->Release();
             break;
+        }
+        if (flags & MF_SOURCE_READERF_ENDOFSTREAM) {  // wait for a restart (looping loading screens)
+            if (sample) sample->Release();
+            if (first) break;
+            while (!r.stop && !r.restart) Sleep(5);
+            continue;
         }
         if (!sample) continue;
         if (first) {
@@ -281,6 +312,7 @@ DWORD WINAPI DecodeThread(void* param)
         bool ok = ConvertSample(sample, f, r.width, r.height, r.slot[writePos]);
         sample->Release();
         if (!ok) continue;
+        if (r.restart) continue;  // decoded before the restart: dropped
         r.slotTime[writePos] = time;
         InterlockedExchange(&r.slotFull[writePos], 1);
         writePos = (writePos + 1) % kQueue;
@@ -328,13 +360,8 @@ bool OpenReplacement(Replacement& r, const char* binkName)
     return true;
 }
 
-void* WINAPI BinkOpenHook(const char* name, DWORD flags)
+void StartReplacement(void* bink, const char* name)
 {
-    void* bink = g_binkOpen(name, flags);
-    // Only the open for playback (0x675140, flags 0x8204000); 0x4137b0 opens
-    // files without closing them, and a first open (0x4000) only selects the
-    // sound track.
-    if (!bink || !name || !(flags & 0x08000000)) return bink;
     for (Replacement& r : g_rep) {
         if (r.bink) continue;
         r.bink = bink;
@@ -342,7 +369,42 @@ void* WINAPI BinkOpenHook(const char* name, DWORD flags)
         else Release(r);
         break;
     }
+}
+
+void* WINAPI BinkOpenHook(const char* name, DWORD flags)
+{
+    void* bink = g_binkOpen(name, flags);
+    // Only the open for playback (0x675140, flags 0x8204000); 0x4137b0 opens
+    // files without closing them, and a first open (0x4000) only selects the
+    // sound track.
+    if (!bink || !name) return bink;
+    if (!(flags & 0x08000000)) {  // opened ahead, maybe played later (loading screens)
+        for (Preopened& p : g_preopened)
+            if (!p.bink || p.bink == bink) {
+                p.bink = bink;
+                strncpy(p.name, name, MAX_PATH - 1);
+                p.name[MAX_PATH - 1] = 0;
+                break;
+            }
+        return bink;
+    }
+    StartReplacement(bink, name);
     return bink;
+}
+
+void __cdecl SetCurrentBinkHook(void* bink)
+{
+    *(void**)kCurrentBink = bink;
+    if (!bink) return;
+    for (Preopened& p : g_preopened)
+        if (p.bink == bink) {
+            if (Replacement* r = Find(bink)) {  // played again: start over
+                Release(*r);
+                g_videoTexture = nullptr;
+            }
+            StartReplacement(bink, p.name);
+            return;
+        }
 }
 
 int WINAPI BinkCopyToBufferHook(void* bink, void* dest, int pitch, DWORD height, DWORD x, DWORD y, DWORD flags)
@@ -352,8 +414,13 @@ int WINAPI BinkCopyToBufferHook(void* bink, void* dest, int pitch, DWORD height,
     // Bink frame numbers are 1-based (BINK +0xc); take the last decoded picture
     // that starts at or before this frame's time.
     DWORD frameNum = ((DWORD*)bink)[3];
+    if (frameNum < r->lastFrame) {  // Bink looped
+        r->readPos = 0;
+        InterlockedExchange(&r->restart, 1);
+    }
+    r->lastFrame = frameNum;
     LONGLONG target = (LONGLONG)((frameNum ? frameNum - 1 : 0) / r->binkFps * 1e7) + 50000;
-    while (r->slotFull[r->readPos] && r->slotTime[r->readPos] <= target) {
+    while (!r->restart && r->slotFull[r->readPos] && r->slotTime[r->readPos] <= target) {
         BYTE* t = r->frame;
         r->frame = r->slot[r->readPos];
         r->slot[r->readPos] = t;
@@ -368,6 +435,8 @@ int WINAPI BinkCopyToBufferHook(void* bink, void* dest, int pitch, DWORD height,
 
 void WINAPI BinkCloseHook(void* bink)
 {
+    for (Preopened& p : g_preopened)
+        if (p.bink == bink) p.bink = nullptr;
     if (Replacement* r = Find(bink)) {
         Release(*r);
         g_videoTexture = nullptr;
@@ -415,6 +484,17 @@ void Video_Install(bool keepAspect)
                           (void**)&g_binkCopyToBuffer) &&
               PatchImport(exe, "binkw32.dll", "_BinkClose@4", (void*)BinkCloseHook, (void**)&g_binkClose);
     Log("video: %s", ok ? "replacement videos enabled (Video\\<name>.mp4)" : "Bink imports not found, disabled");
+    if (ok && memcmp((void*)kSetCurrentBink, kSetCurrentBinkCode, sizeof(kSetCurrentBinkCode)) == 0) {
+        BYTE* p = (BYTE*)kSetCurrentBink;
+        DWORD prot;
+        VirtualProtect(p, 5, PAGE_EXECUTE_READWRITE, &prot);
+        p[0] = 0xE9;
+        *(DWORD*)(p + 1) = (DWORD)SetCurrentBinkHook - (kSetCurrentBink + 5);
+        VirtualProtect(p, 5, prot, &prot);
+        FlushInstructionCache(GetCurrentProcess(), p, 5);
+    } else if (ok) {
+        Log("video: unknown loading screen code, loading screens keep their Bink pictures");
+    }
 }
 
 // Redirects both calls of the quad builder (applied once Direct3D is created,

@@ -412,6 +412,12 @@ and `0x674eeb`). `0x674c50` copies each frame (`BinkDoFrame`, `BinkCopyToBuffer`
   from Media Foundation's converter as a fallback); the game thread only copies
   the picture. Decoding a 2560×1792 frame on the game thread took ~37 ms, more
   than a frame at 29.97 fps, and Bink's sound stuttered every few seconds.
+* Loading screens (`poplogo`, `pop_out`) are opened ahead by `0x4137b0` (flags
+  `0x4000` / `0x6000`, handles kept in the loading screen object) and made the current
+  video later by `0x674d20` (cdecl, stores the handle at `0xaf44c8`), so `0x675140`
+  skips `BinkOpen`. Handles opened ahead are remembered with their file name, and
+  `0x674d20` is replaced by a function that also starts their replacement. When Bink
+  loops (frame number going back), the decoding thread starts over.
 
 ## Sound
 
