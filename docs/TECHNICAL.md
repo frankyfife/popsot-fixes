@@ -388,6 +388,16 @@ inverts the two hashes of skipped keys, so uploads never match them. The HD
 pack's font atlas `0B0041BB` (512×128) is replaced by a 256×64 image and is
 skipped by default.
 
+The payloads are stored uncompressed (all mip levels, format byte at record
+`+0xf`: 1 DXT1, 2 DXT5, 3 A8R8G8B8; replacement size at `+0xa`). 32 of the HD
+pack's replacements are empty: every block black (`3100668A`, `310423D3`…,
+`4B002584`, `4B0035E2`, …) or fully transparent (`4B0025A7`, `4C000284`); in the
+treasure vault at the start, walls and floor then show black. When the pack is
+loaded, the fix reads the first 4 KB of every payload (the whole top level only
+if those are empty, about 0.2 s for all 1945 textures), decodes the DXT blocks
+and skips every texture with fewer than 1 % visible pixels (brightest channel
+and alpha above 8) in the same way as `[textures] skip`.
+
 `[textures] brightness` (default 1.25) makes up for the HD pack's darker
 textures (compared in the same scene: about 0.8 of the original brightness in
 every brightness range). The pack creates each replacement (managed pool) with

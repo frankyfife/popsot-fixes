@@ -132,6 +132,9 @@ Notes:
 * The HD pack's textures are darker than the originals (about 80 % of the brightness
   on screen); the fix brightens them by 1.25 while they load (`[textures] brightness`,
   1 = as in the pack).
+* 32 textures of the HD pack are empty (black or fully transparent), e.g. walls and
+  floor of the treasure vault at the start, which then show black. The fix finds them
+  when the pack loads and keeps the game's own textures there.
 * The 4K pack was not tested. The game is a 32-bit program limited to 2 GB of memory,
   which the 4K textures may exceed.
 * To play without the pack, remove the two files or set `[textures] pack=` (empty).
