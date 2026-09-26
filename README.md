@@ -136,8 +136,9 @@ Notes:
 All credit for the textures goes to Evgeshajk; the pack is not part of this project.
 
 ### Level select
-The main menu gets the developer's **Special Load** entry, which is hidden in the PC
-release: it lists every level of the game and loads it directly.
+The main menu gets the developer's **Special Load** entry ("Spezielle Karte laden"),
+which is hidden in the PC release: it lists every level of the game and loads it
+directly. It sits in the menu column above Quit, like "Special" in the console menus.
 
 ### Xbox menus *(experimental, off by default)*
 The console front end (3D scene, fading text, controller hints) is still inside the PC

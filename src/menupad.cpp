@@ -17,6 +17,7 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
+#include <stdio.h>
 #include <xinput.h>
 #include <stdlib.h>
 #include <string.h>
@@ -438,6 +439,7 @@ typedef int(__thiscall* Click_t)(void* handler, char* elem);
 typedef void(__thiscall* OpenPcPage_t)(void* pcMenu, int page, char a, int b);
 const OpenPcPage_t OpenPcPage = (OpenPcPage_t)0x00409870;
 Click_t g_mainMenuClick;
+bool g_arrange;  // the level select button can be moved (see ArrangeMainMenu)
 
 int __fastcall MainMenuClick(void* handler, void* /*edx*/, char* elem)
 {
@@ -447,6 +449,89 @@ int __fastcall MainMenuClick(void* handler, void* /*edx*/, char* elem)
         return 1;
     }
     return g_mainMenuClick(handler, elem);
+}
+
+// The PC main menu has its entries in a column on the right and puts the
+// "SpecialLoad" button at the top left, like a title. It is moved into the
+// column, before Quit, like the console menus list "Special". A button's
+// position is the x / y (shorts, virtual 640x480) at +8 / +10 of the object its
+// widget points to at +4 (see the button rect, 0x7250d0). The menu animation
+// sets it every frame from its keyframes through 0x713800 / 0x713820
+// (thiscall, copy x / y from a pair of shorts / from another position object);
+// both are replaced, and the copy is followed by our position for the two
+// buttons. Credits -> SpecialLoad -> Quit keep the column's spacing.
+const DWORD kPosFromXY = 0x00713800, kPosFromObject = 0x00713820;
+const unsigned char kPosFromXYCode[] = { 0x8B, 0x44, 0x24, 0x04, 0x66, 0x8B, 0x10, 0x66, 0x89, 0x51, 0x08 };
+const unsigned char kPosFromObjectCode[] = { 0x8B, 0x44, 0x24, 0x04, 0x66, 0x8B, 0x50, 0x08, 0x66, 0x89, 0x51, 0x08 };
+struct PosOverride {
+    char* obj;
+    short x, y;
+} g_posOverride[2];
+
+void Override(char* self)
+{
+    for (PosOverride& o : g_posOverride)
+        if (o.obj && o.obj == self) {
+            *(short*)(self + 8) = o.x;
+            *(short*)(self + 10) = o.y;
+        }
+}
+
+void __fastcall PosFromXY(char* self, void*, const short* xy)
+{
+    *(short*)(self + 8) = xy[0];
+    *(short*)(self + 10) = xy[1];
+    Override(self);
+}
+
+void __fastcall PosFromObject(char* self, void*, const char* src)
+{
+    *(short*)(self + 8) = *(const short*)(src + 8);
+    *(short*)(self + 10) = *(const short*)(src + 10);
+    Override(self);
+}
+
+char* FindElement(char* page, const char* name)
+{
+    for (char** it = *(char***)(page + 0x28); it && it < *(char***)(page + 0x2c); it++)
+        if (*it && _stricmp(*it + 4, name) == 0) return *it;
+    return nullptr;
+}
+
+char* ButtonPosObject(char* elem)
+{
+    char* w = elem ? *(char**)(elem + 0x2c) : nullptr;
+    return w ? *(char**)(w + 4) : nullptr;
+}
+
+void ArrangeMainMenu(char* page)
+{
+    char* options = ButtonPosObject(FindElement(page, "Options"));
+    char* credits = ButtonPosObject(FindElement(page, "Credits"));
+    char* special = ButtonPosObject(FindElement(page, "SpecialLoad"));
+    char* quit = ButtonPosObject(FindElement(page, "Quit"));
+    if (!options || !credits || !special || !quit) return;
+    short x = *(short*)(credits + 8), y = *(short*)(credits + 10);
+    short step = y - *(short*)(options + 10);
+    if (step <= 0) return;
+    if (g_posOverride[0].obj != special || g_posOverride[1].obj != quit) {
+        Log("menu pad: level select moved into the menu column (%d,%d -> %d,%d)", *(short*)(special + 8),
+            *(short*)(special + 10), x, y + step);
+    }
+    g_posOverride[0] = { special, x, (short)(y + step) };
+    g_posOverride[1] = { quit, x, (short)(y + 2 * step) };
+    Override(special);
+    Override(quit);
+}
+
+void JumpTo(DWORD from, void* to)
+{
+    DWORD prot;
+    VirtualProtect((void*)from, 5, PAGE_EXECUTE_READWRITE, &prot);
+    *(BYTE*)from = 0xE9;
+    *(DWORD*)(from + 1) = (DWORD)to - (from + 5);
+    VirtualProtect((void*)from, 5, prot, &prot);
+    FlushInstructionCache(GetCurrentProcess(), (void*)from, 5);
 }
 
 void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
@@ -490,6 +575,12 @@ void MenuPad_Install()
     VirtualProtect(p, 2, prot, &prot);
     FlushInstructionCache(GetCurrentProcess(), p, 2);
     Log("menu pad: level select button enabled in the main menu");
+    if (memcmp((void*)kPosFromXY, kPosFromXYCode, sizeof(kPosFromXYCode)) == 0 &&
+        memcmp((void*)kPosFromObject, kPosFromObjectCode, sizeof(kPosFromObjectCode)) == 0) {
+        JumpTo(kPosFromXY, (void*)PosFromXY);
+        JumpTo(kPosFromObject, (void*)PosFromObject);
+        g_arrange = true;
+    }
 }
 
 // ---------------------------------------------------------------- public
@@ -504,6 +595,10 @@ void MenuPad_OnPresent()
     }
     if (!g_ready) return;
     __try {
+        void* mgr = g_arrange ? UiManager() : nullptr;
+        char* page = mgr ? TopPage(mgr) : nullptr;
+        if (page && FindElement(page, "SpecialLoad")) ArrangeMainMenu(page);
+        else memset(g_posOverride, 0, sizeof(g_posOverride));  // the objects may be reused
         Update();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         g_ready = false;

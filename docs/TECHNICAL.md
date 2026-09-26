@@ -190,6 +190,15 @@ needed), because the profile and save lists select on double click.
 `0x4094fb`) and the click handler (`0x409180`) has no case for it. The patch shows the
 button and opens the page through the PC page opener `0x409870`.
 
+The button sits at the top left of the page data, like a title. A button's position
+is the pair of shorts at `+8` of the object its widget points to at `+4` (virtual
+640×480, see the button rect `0x7250d0`); the page animation sets it every frame from
+keyframes through `0x713800` / `0x713820` (thiscall: copy x / y from a pair of shorts
+or from another position object). Both are replaced by copies that then apply our
+position to the SpecialLoad and Quit buttons: SpecialLoad goes into the column after
+Credits and Quit one row further down, with the column's spacing. The override is
+dropped when the main menu is not the top page.
+
 ## Console (Xbox) menus
 
 The PC build still contains the complete console front end: Jade AI scripts, compiled
