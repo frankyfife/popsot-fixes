@@ -131,11 +131,102 @@ bool Readable(const void* p, size_t n)
     return (BYTE*)p + n <= (BYTE*)mi.BaseAddress + mi.RegionSize;
 }
 
+// A pixel is visible if its brightest colour channel and its alpha exceed 8.
+inline bool Visible(int r, int g, int b, int a)
+{
+    int m = r > g ? r : g;
+    return (m > b ? m : b) > 8 && a > 8;
+}
+
+// Brightest channel of an RGB565 colour, 0..255.
+inline int Max565(DWORD c)
+{
+    int r = (c >> 11) * 255 / 31, g = ((c >> 5) & 63) * 255 / 63, b = (c & 31) * 255 / 31;
+    int m = r > g ? r : g;
+    return m > b ? m : b;
+}
+
+// True if fewer than 1 % of the pixels in the first `size` bytes of a payload
+// (format 1 DXT1, 2 DXT5, 3 A8R8G8B8) are visible.
+bool Empty(int fmt, const BYTE* d, DWORD size)
+{
+    DWORD visible = 0, pixels = 0;
+    if (fmt == 3) {
+        for (DWORD o = 0; o + 4 <= size; o += 4, pixels++) visible += Visible(d[o + 2], d[o + 1], d[o], d[o + 3]);
+    } else if (fmt == 1 || fmt == 2) {
+        DWORD bs = fmt == 1 ? 8 : 16;
+        for (DWORD o = 0; o + bs <= size; o += bs, pixels += 16) {
+            const BYTE* c = d + o + (fmt == 2 ? 8 : 0);
+            DWORD c0 = *(const WORD*)c, c1 = *(const WORD*)(c + 2), idx = *(const DWORD*)(c + 4);
+            // Brightness and alpha of the four colour entries (DXT1 with c0 <= c1:
+            // the third is the midpoint, the fourth transparent black).
+            int m0 = Max565(c0), m1 = Max565(c1), bright[4], alpha[4] = { 255, 255, 255, 255 };
+            bright[0] = m0;
+            bright[1] = m1;
+            if (fmt == 2 || c0 > c1) { bright[2] = (2 * m0 + m1) / 3; bright[3] = (m0 + 2 * m1) / 3; }
+            else { bright[2] = (m0 + m1) / 2; bright[3] = 0; alpha[3] = 0; }
+            // DXT5 alpha: two endpoints and 3-bit indices (48 bits after them).
+            int a[8];
+            ULONGLONG ai = 0;
+            if (fmt == 2) {
+                int a0 = d[o], a1 = d[o + 1];
+                a[0] = a0;
+                a[1] = a1;
+                for (int i = 1; i < 7; i++)
+                    a[i + 1] = a0 > a1 ? ((7 - i) * a0 + i * a1) / 7 : i < 5 ? ((5 - i) * a0 + i * a1) / 5 : (i == 5 ? 0 : 255);
+                for (int i = 0; i < 6; i++) ai |= (ULONGLONG)d[o + 2 + i] << (8 * i);
+            }
+            for (int p = 0; p < 16; p++) {
+                int ci = (idx >> (2 * p)) & 3;
+                int al = fmt == 2 ? a[(ai >> (3 * p)) & 7] : alpha[ci];
+                visible += Visible(bright[ci], 0, 0, al);
+            }
+        }
+    } else {
+        return false;
+    }
+    return pixels && visible * 100 < pixels;
+}
+
+// Keys of the textures whose top level is (almost) empty: black or fully
+// transparent. 32 of the HD pack's replacements are, among them walls and floor
+// of the treasure vault, which then show black; the game's own textures are
+// better than nothing. Only the first 4 KB of every payload are read, the
+// whole level only if those are empty.
+int FindEmptyTextures(HANDLE f, const BYTE* recs, DWORD count, DWORD* keys, int max)
+{
+    int n = 0;
+    BYTE head[4096];
+    for (DWORD i = 0; i < count && n < max; i++) {
+        const BYTE* r = recs + i * 0x68;
+        int w = *(const WORD*)(r + 0xa), h = *(const WORD*)(r + 0xc), fmt = r[0xf];
+        ULONGLONG off = *(const ULONGLONG*)(r + 0x18), size = *(const ULONGLONG*)(r + 0x20);
+        ULONGLONG level = fmt == 3 ? (ULONGLONG)w * h * 4
+                                   : (ULONGLONG)((w + 3) / 4) * ((h + 3) / 4) * (fmt == 1 ? 8 : 16);
+        if (fmt < 1 || fmt > 3 || level == 0 || level > size || level > 64 * 1024 * 1024) continue;
+        LARGE_INTEGER pos;
+        pos.QuadPart = (LONGLONG)off;
+        DWORD want = level < sizeof(head) ? (DWORD)level : sizeof(head), got = 0;
+        if (!SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) || !ReadFile(f, head, want, &got, nullptr) || got != want ||
+            !Empty(fmt, head, want))
+            continue;
+        bool empty = true;
+        if (level > want) {
+            BYTE* all = (BYTE*)HeapAlloc(GetProcessHeap(), 0, (SIZE_T)level);
+            empty = all && SetFilePointerEx(f, pos, nullptr, FILE_BEGIN) && ReadFile(f, all, (DWORD)level, &got, nullptr) &&
+                    got == level && Empty(fmt, all, (DWORD)level);
+            if (all) HeapFree(GetProcessHeap(), 0, all);
+        }
+        if (empty) keys[n++] = *(const DWORD*)r;
+    }
+    return n;
+}
+
 // Leaves the textures with the keys in `list` (hex, separated by commas or
-// spaces) to the game.
+// spaces) and the pack's empty ones to the game.
 void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
 {
-    DWORD keys[64];
+    DWORD keys[256];
     int nkeys = 0;
     for (const char* s = list; *s && nkeys < 64;) {
         char* end;
@@ -144,7 +235,7 @@ void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
         keys[nkeys++] = k;
         s = end;
     }
-    if (!nkeys) return;
+    int nlisted = nkeys;
     // Header and texture records from the file.
     HANDLE f = CreateFileA(jkPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
@@ -162,8 +253,18 @@ void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
             }
         }
     }
+    if (recs) {
+        DWORD t0 = GetTickCount();
+        int nempty = FindEmptyTextures(f, recs, count, keys + nkeys, 256 - nkeys);
+        nkeys += nempty;
+        Log("texture pack: %d empty textures found (%lu ms)", nempty, GetTickCount() - t0);
+    }
     CloseHandle(f);
     if (!recs) return;
+    if (!nkeys) {
+        HeapFree(GetProcessHeap(), 0, recs);
+        return;
+    }
     DWORD key0 = *(DWORD*)recs, key1 = *(DWORD*)(recs + 0x68);
     // The pack's table: a pointer in its writable sections to key0 ... key1.
     BYTE* base = (BYTE*)mod;
@@ -200,12 +301,12 @@ void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
                 for (DWORD o = 4; o + 64 <= stride; o += 4)
                     if (memcmp(rec + o, frec + 0x28, 64) == 0) {
                         for (int b = 0; b < 64; b++) rec[o + b] ^= 0xA5;
-                        result = "left to the game ([textures] skip)";
+                        result = k < nlisted ? "left to the game ([textures] skip)" : "left to the game";
                         break;
                     }
                 break;
             }
-            Log("texture pack: texture %08lX %s", keys[k], result);
+            Log("texture pack: texture %08lX%s %s", keys[k], k < nlisted ? "" : " (empty)", result);
         }
     }
     HeapFree(GetProcessHeap(), 0, recs);
