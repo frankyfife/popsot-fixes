@@ -56,23 +56,32 @@ BinkOpen_t g_binkOpen;
 BinkCopyToBuffer_t g_binkCopyToBuffer;
 BinkClose_t g_binkClose;
 
+// Decoding: a thread per video decodes the replacement ahead into a small
+// queue of pictures, so the game thread only copies the one that belongs to
+// the current Bink frame (decoding a 2560x1792 frame on the game thread took
+// longer than a frame, and Bink's sound stuttered). The decoder's own NV12
+// output is converted to BGRA here (BT.601 unless the file says BT.709, as
+// ffmpeg encodes RGB input); Media Foundation's RGB32 conversion is the
+// fallback for other formats.
+const int kQueue = 4;
 struct Replacement {
     void* bink;
-    IMFSourceReader* reader;
-    UINT width, height;
-    LONG stride;         // of the decoded RGB32 frames, negative = bottom-up
+    char path[MAX_PATH];
+    UINT width, height;  // picture size
     double binkFps;
-    BYTE* frame;         // current picture, top-down, width * 4 per row
-    bool haveFrame;
-    IMFSample* next;     // decoded ahead
-    LONGLONG nextTime;   // 100 ns units
-    bool eof;
+    BYTE* frame;         // current picture, top-down BGRA with alpha 255
+    // decoding thread
+    HANDLE thread, opened;
+    volatile LONG stop, ok;
+    BYTE* slot[kQueue];  // decoded pictures, handed over by swapping with frame
+    LONGLONG slotTime[kQueue];
+    volatile LONG slotFull[kQueue];
+    int readPos;
 };
 const int kMaxReplacements = 4;
 Replacement g_rep[kMaxReplacements];
 Replacement* g_pending;               // opened, waiting for its texture
 IDirect3DBaseTexture9* g_videoTexture;  // texture of the current replacement
-bool g_mfStarted;
 
 Replacement* Find(void* bink)
 {
@@ -90,73 +99,210 @@ UINT Pow2(UINT v)
 
 void Release(Replacement& r)
 {
-    if (r.next) r.next->Release();
-    if (r.reader) r.reader->Release();
+    if (r.thread) {
+        InterlockedExchange(&r.stop, 1);
+        WaitForSingleObject(r.thread, INFINITE);
+        CloseHandle(r.thread);
+    }
+    if (r.opened) CloseHandle(r.opened);
+    for (BYTE* s : r.slot) delete[] s;
     delete[] r.frame;
     if (g_pending == &r) g_pending = nullptr;
     r = Replacement();
 }
 
-// Decodes the next sample into r.next (null at the end of the stream).
-void ReadAhead(Replacement& r)
+inline BYTE Clamp(int v) { return (BYTE)(v < 0 ? 0 : v > 255 ? 255 : v); }
+
+// Decoder output layout.
+struct Format {
+    bool nv12;
+    UINT codedHeight;  // rows of the Y plane (NV12: the UV plane follows)
+    LONG stride;       // bytes per row (RGB32: negative = bottom-up)
+    int cr, cgu, cgv, cb, cy, y0;  // YUV -> RGB, 8.8 fixed point
+};
+
+void ConvertNV12(const BYTE* p, LONG pitch, const Format& f, UINT w, UINT h, BYTE* out)
 {
-    if (r.next) { r.next->Release(); r.next = nullptr; }
-    while (!r.eof) {
-        DWORD stream, flags = 0;
-        LONGLONG time = 0;
-        IMFSample* sample = nullptr;
-        HRESULT hr = r.reader->ReadSample((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &stream, &flags, &time,
-                                          &sample);
-        if (FAILED(hr) || (flags & (MF_SOURCE_READERF_ENDOFSTREAM | MF_SOURCE_READERF_ERROR))) {
-            if (sample) sample->Release();
-            r.eof = true;
-            return;
-        }
-        if (sample) {
-            r.next = sample;
-            r.nextTime = time;
-            return;
+    const BYTE* uvPlane = p + (size_t)pitch * f.codedHeight;
+    for (UINT y = 0; y < h; y++) {
+        const BYTE* py = p + (size_t)pitch * y;
+        const BYTE* puv = uvPlane + (size_t)pitch * (y / 2);
+        BYTE* o = out + (size_t)w * 4 * y;
+        for (UINT x = 0; x < w; x += 2) {
+            int d = puv[x] - 128, e = puv[x + 1] - 128;
+            int rr = f.cr * e + 128, gg = -f.cgu * d - f.cgv * e + 128, bb = f.cb * d + 128;
+            for (UINT i = 0; i < 2 && x + i < w; i++) {
+                int c = f.cy * (py[x + i] - f.y0);
+                o[0] = Clamp((c + bb) >> 8);
+                o[1] = Clamp((c + gg) >> 8);
+                o[2] = Clamp((c + rr) >> 8);
+                o[3] = 255;
+                o += 4;
+            }
         }
     }
 }
 
-// Copies r.next into r.frame (top-down).
-bool TakeNext(Replacement& r)
+// Copies a decoded sample into `out` (top-down BGRA).
+bool ConvertSample(IMFSample* sample, const Format& f, UINT w, UINT h, BYTE* out)
 {
     IMFMediaBuffer* buf = nullptr;
-    if (FAILED(r.next->ConvertToContiguousBuffer(&buf))) return false;
+    if (FAILED(sample->ConvertToContiguousBuffer(&buf))) return false;
+    bool done = false;
     BYTE* p = nullptr;
+    LONG pitch = 0;
+    IMF2DBuffer* b2 = nullptr;
+    bool locked2d = SUCCEEDED(buf->QueryInterface(IID_PPV_ARGS(&b2))) && SUCCEEDED(b2->Lock2D(&p, &pitch));
     DWORD len = 0;
-    bool ok = false;
-    if (SUCCEEDED(buf->Lock(&p, nullptr, &len))) {
-        UINT rowBytes = r.width * 4;
-        UINT absStride = (UINT)(r.stride < 0 ? -r.stride : r.stride);
-        if ((DWORD)absStride * r.height <= len) {
-            for (UINT y = 0; y < r.height; y++) {
-                const BYTE* src = p + (size_t)(r.stride < 0 ? r.height - 1 - y : y) * absStride;
-                memcpy(r.frame + (size_t)y * rowBytes, src, rowBytes);
+    if (!locked2d && SUCCEEDED(buf->Lock(&p, nullptr, &len))) pitch = f.stride;
+    if (p) {
+        if (f.nv12) {
+            if (pitch > 0) {
+                ConvertNV12(p, pitch, f, w, h, out);
+                done = true;
             }
-            ok = true;
+        } else {
+            LONG abs = pitch < 0 ? -pitch : pitch;
+            for (UINT y = 0; y < h; y++) {
+                // Lock2D returns the top row with a signed pitch; Lock the buffer start.
+                const BYTE* src = locked2d ? p + (LONG)y * pitch
+                                           : p + (size_t)(pitch < 0 ? h - 1 - y : y) * abs;
+                DWORD* d = (DWORD*)(out + (size_t)w * 4 * y);
+                const DWORD* s = (const DWORD*)src;
+                for (UINT i = 0; i < w; i++) d[i] = s[i] | 0xFF000000;
+            }
+            done = true;
         }
-        buf->Unlock();
+        if (locked2d) b2->Unlock2D();
+        else buf->Unlock();
     }
+    if (b2) b2->Release();
     buf->Release();
-    return ok;
+    return done;
+}
+
+// Opens the reader for r.path and chooses the output format: NV12, else RGB32.
+IMFSourceReader* OpenReader(Replacement& r, Format& f)
+{
+    wchar_t wpath[MAX_PATH];
+    MultiByteToWideChar(CP_ACP, 0, r.path, -1, wpath, MAX_PATH);
+    IMFSourceReader* reader = nullptr;
+    for (int pass = 0; pass < 2 && !reader; pass++) {
+        f = Format();
+        f.nv12 = pass == 0;
+        IMFAttributes* attr = nullptr;
+        MFCreateAttributes(&attr, 1);
+        if (!f.nv12) attr->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
+        HRESULT hr = MFCreateSourceReaderFromURL(wpath, attr, &reader);
+        attr->Release();
+        if (FAILED(hr)) { Log("video: cannot open %s (0x%08lx)", r.path, hr); return nullptr; }
+        reader->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
+        reader->SetStreamSelection((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE);
+        IMFMediaType* type = nullptr;
+        MFCreateMediaType(&type);
+        type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+        type->SetGUID(MF_MT_SUBTYPE, f.nv12 ? MFVideoFormat_NV12 : MFVideoFormat_RGB32);
+        hr = reader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, type);
+        type->Release();
+        IMFMediaType* cur = nullptr;
+        if (SUCCEEDED(hr)) hr = reader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, &cur);
+        if (FAILED(hr)) {
+            reader->Release();
+            reader = nullptr;
+            continue;
+        }
+        UINT cw = 0, ch = 0;
+        MFGetAttributeSize(cur, MF_MT_FRAME_SIZE, &cw, &ch);
+        r.width = cw;
+        r.height = ch;
+        MFVideoArea area;
+        if (SUCCEEDED(cur->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE, (UINT8*)&area, sizeof(area), nullptr)) &&
+            area.Area.cx > 0 && area.Area.cy > 0 && (UINT)area.Area.cx <= cw && (UINT)area.Area.cy <= ch) {
+            r.width = area.Area.cx;
+            r.height = area.Area.cy;
+        }
+        f.codedHeight = ch;
+        UINT32 stride = 0;
+        f.stride = SUCCEEDED(cur->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride)) ? (LONG)stride
+                                                                            : (LONG)(f.nv12 ? cw : cw * 4);
+        UINT32 matrix = 0, range = 0;
+        cur->GetUINT32(MF_MT_YUV_MATRIX, &matrix);
+        cur->GetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, &range);
+        cur->Release();
+        bool bt709 = matrix == MFVideoTransferMatrix_BT709, full = range == MFNominalRange_0_255;
+        f.y0 = full ? 0 : 16;
+        f.cy = full ? 256 : 298;
+        if (bt709) { f.cr = full ? 403 : 459; f.cgu = full ? 48 : 55; f.cgv = full ? 120 : 136; f.cb = full ? 475 : 541; }
+        else       { f.cr = full ? 359 : 409; f.cgu = full ? 88 : 100; f.cgv = full ? 183 : 208; f.cb = full ? 454 : 516; }
+    }
+    return reader;
+}
+
+DWORD WINAPI DecodeThread(void* param)
+{
+    Replacement& r = *(Replacement*)param;
+    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    Format f;
+    IMFSourceReader* reader = OpenReader(r, f);
+    bool first = true;
+    int writePos = 0;
+    if (reader && (!r.width || !r.height || r.width > 4096 || r.height > 4096)) {
+        Log("video: %s not usable (%ux%u)", r.path, r.width, r.height);
+        reader->Release();
+        reader = nullptr;
+    }
+    while (reader && !r.stop) {
+        if (!first && r.slotFull[writePos]) {  // queue full
+            Sleep(1);
+            continue;
+        }
+        DWORD stream, flags = 0;
+        LONGLONG time = 0;
+        IMFSample* sample = nullptr;
+        HRESULT hr = reader->ReadSample((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, 0, &stream, &flags, &time, &sample);
+        if (FAILED(hr) || (flags & (MF_SOURCE_READERF_ENDOFSTREAM | MF_SOURCE_READERF_ERROR))) {
+            if (sample) sample->Release();
+            break;
+        }
+        if (!sample) continue;
+        if (first) {
+            // The first picture, before the game creates the texture.
+            size_t size = (size_t)r.width * r.height * 4;
+            r.frame = new BYTE[size];
+            for (BYTE*& s : r.slot) s = new BYTE[size];
+            bool ok = ConvertSample(sample, f, r.width, r.height, r.frame);
+            sample->Release();
+            first = false;
+            if (!ok) break;
+            InterlockedExchange(&r.ok, 1);
+            SetEvent(r.opened);
+            continue;
+        }
+        bool ok = ConvertSample(sample, f, r.width, r.height, r.slot[writePos]);
+        sample->Release();
+        if (!ok) continue;
+        r.slotTime[writePos] = time;
+        InterlockedExchange(&r.slotFull[writePos], 1);
+        writePos = (writePos + 1) % kQueue;
+    }
+    SetEvent(r.opened);  // also when it failed before the first picture
+    if (reader) reader->Release();
+    CoUninitialize();
+    return 0;
 }
 
 bool OpenReplacement(Replacement& r, const char* binkName)
 {
-    char path[MAX_PATH];
     const char* exts[] = { ".mp4", ".mov", ".mkv" };
     bool found = false;
     for (const char* ext : exts) {
-        strncpy(path, binkName, MAX_PATH - 8);
-        path[MAX_PATH - 8] = 0;
-        char* dot = strrchr(path, '.');
-        char* slash = strrchr(path, '\\');
+        strncpy(r.path, binkName, MAX_PATH - 8);
+        r.path[MAX_PATH - 8] = 0;
+        char* dot = strrchr(r.path, '.');
+        char* slash = strrchr(r.path, '\\');
         if (dot && (!slash || dot > slash)) *dot = 0;
-        strcat(path, ext);
-        if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) { found = true; break; }
+        strcat(r.path, ext);
+        if (GetFileAttributesA(r.path) != INVALID_FILE_ATTRIBUTES) { found = true; break; }
     }
     if (!found) return false;
 
@@ -168,44 +314,17 @@ bool OpenReplacement(Replacement& r, const char* binkName)
         fclose(f);
     }
 
-    if (!g_mfStarted) {
+    static bool mfStarted;
+    if (!mfStarted) {
         if (FAILED(MFStartup(MF_VERSION, MFSTARTUP_LITE))) { Log("video: Media Foundation not available"); return false; }
-        g_mfStarted = true;
+        mfStarted = true;
     }
-    wchar_t wpath[MAX_PATH];
-    MultiByteToWideChar(CP_ACP, 0, path, -1, wpath, MAX_PATH);
-    IMFAttributes* attr = nullptr;
-    MFCreateAttributes(&attr, 1);
-    attr->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
-    HRESULT hr = MFCreateSourceReaderFromURL(wpath, attr, &r.reader);
-    attr->Release();
-    if (FAILED(hr)) { Log("video: cannot open %s (0x%08lx)", path, hr); return false; }
-    r.reader->SetStreamSelection((DWORD)MF_SOURCE_READER_ALL_STREAMS, FALSE);
-    r.reader->SetStreamSelection((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, TRUE);
-    IMFMediaType* type = nullptr;
-    MFCreateMediaType(&type);
-    type->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    type->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
-    hr = r.reader->SetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, nullptr, type);
-    type->Release();
-    IMFMediaType* cur = nullptr;
-    if (SUCCEEDED(hr)) hr = r.reader->GetCurrentMediaType((DWORD)MF_SOURCE_READER_FIRST_VIDEO_STREAM, &cur);
-    if (SUCCEEDED(hr)) {
-        MFGetAttributeSize(cur, MF_MT_FRAME_SIZE, &r.width, &r.height);
-        UINT32 stride = 0;
-        r.stride = SUCCEEDED(cur->GetUINT32(MF_MT_DEFAULT_STRIDE, &stride)) ? (LONG)stride : (LONG)(r.width * 4);
-        cur->Release();
-    }
-    if (FAILED(hr) || !r.width || !r.height || r.width > 4096 || r.height > 4096) {
-        Log("video: %s not usable (0x%08lx, %ux%u)", path, hr, r.width, r.height);
-        return false;
-    }
-    r.frame = new BYTE[(size_t)r.width * r.height * 4];
-    ReadAhead(r);
-    if (!r.next || !TakeNext(r)) { Log("video: %s has no decodable frames", path); return false; }
-    r.haveFrame = true;
-    ReadAhead(r);
-    Log("video: %s replaces the picture (%ux%u)", path, r.width, r.height);
+    r.opened = CreateEventA(nullptr, TRUE, FALSE, nullptr);
+    r.thread = CreateThread(nullptr, 0, DecodeThread, &r, 0, nullptr);
+    if (!r.thread) return false;
+    WaitForSingleObject(r.opened, 10000);
+    if (!r.ok) { Log("video: %s has no decodable frames", r.path); return false; }
+    Log("video: %s replaces the picture (%ux%u)", r.path, r.width, r.height);
     return true;
 }
 
@@ -230,20 +349,20 @@ int WINAPI BinkCopyToBufferHook(void* bink, void* dest, int pitch, DWORD height,
 {
     Replacement* r = Find(bink);
     if (!r || g_pending == r) return g_binkCopyToBuffer(bink, dest, pitch, height, x, y, flags);
-    // Bink frame numbers are 1-based (BINK +0xc); take the last replacement frame
+    // Bink frame numbers are 1-based (BINK +0xc); take the last decoded picture
     // that starts at or before this frame's time.
     DWORD frameNum = ((DWORD*)bink)[3];
     LONGLONG target = (LONGLONG)((frameNum ? frameNum - 1 : 0) / r->binkFps * 1e7) + 50000;
-    while (r->next && r->nextTime <= target) {
-        TakeNext(*r);
-        ReadAhead(*r);
+    while (r->slotFull[r->readPos] && r->slotTime[r->readPos] <= target) {
+        BYTE* t = r->frame;
+        r->frame = r->slot[r->readPos];
+        r->slot[r->readPos] = t;
+        InterlockedExchange(&r->slotFull[r->readPos], 0);
+        r->readPos = (r->readPos + 1) % kQueue;
     }
     UINT rowBytes = r->width * 4;
-    for (UINT row = 0; row < r->height; row++) {
-        DWORD* d = (DWORD*)((BYTE*)dest + (size_t)row * pitch);
-        const DWORD* s = (const DWORD*)(r->frame + (size_t)row * rowBytes);
-        for (UINT i = 0; i < r->width; i++) d[i] = s[i] | 0xFF000000;
-    }
+    for (UINT row = 0; row < r->height; row++)
+        memcpy((BYTE*)dest + (size_t)row * pitch, r->frame + (size_t)row * rowBytes, rowBytes);
     return 0;
 }
 

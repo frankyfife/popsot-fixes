@@ -392,7 +392,12 @@ and `0x674eeb`). `0x674c50` copies each frame (`BinkDoFrame`, `BinkCopyToBuffer`
   are hooked. If `<name>.mp4` (or `.mov`, `.mkv`) exists, Bink still plays the
   original, but the texture is created at the replacement's size (the UV scale is
   corrected right after), and `BinkCopyToBuffer` copies the replacement frame at the
-  Bink frame's time, decoded with Media Foundation (`IMFSourceReader`, RGB32).
+  Bink frame's time, decoded with Media Foundation (`IMFSourceReader`). A thread
+  per video decodes ahead into a queue of four pictures (the decoder's NV12
+  output, converted to BGRA with BT.601 unless the file is tagged BT.709; RGB32
+  from Media Foundation's converter as a fallback); the game thread only copies
+  the picture. Decoding a 2560×1792 frame on the game thread took ~37 ms, more
+  than a frame at 29.97 fps, and Bink's sound stuttered every few seconds.
 
 ## Sound
 
