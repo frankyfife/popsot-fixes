@@ -129,6 +129,9 @@ Notes:
   (`[textures] skip`).
 * The HD pack also removes the game's bloom (glow around bright light); the fix keeps
   it (`[textures] bloom`).
+* The HD pack's textures are darker than the originals (about 80 % of the brightness
+  on screen); the fix brightens them by 1.25 while they load (`[textures] brightness`,
+  1 = as in the pack).
 * The 4K pack was not tested. The game is a 32-bit program limited to 2 GB of memory,
   which the 4K textures may exceed.
 * To play without the pack, remove the two files or set `[textures] pack=` (empty).
@@ -161,6 +164,7 @@ file is the default.
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
 | `[textures] pack` | `poptex_d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
 | `[textures] bloom` | `1` | keep the game's bloom (the HD pack would remove it) |
+| `[textures] brightness` | `1.25` | brightness of the pack's textures, 1 = unchanged |
 | `[textures] skip` | `0B0041BB` | pack textures to leave to the game (hex keys from `poptex_d3d9.log`; default: the font) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
 | `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |

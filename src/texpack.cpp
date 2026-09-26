@@ -38,6 +38,19 @@
 // table through a pointer in the pack's data section (its first two keys are
 // those of the file), and invalidate the hashes of skipped keys, so they never
 // match and the game keeps its own texture.
+//
+// The pack's textures are darker than the originals (about 0.8 of the
+// brightness on screen). [textures] brightness scales their colours when the
+// pack uploads them. The pack creates each replacement with the CreateTexture
+// it found in the device vtable and fills it with LockRect/UnlockRect of the
+// texture vtable, both called through the pointers it saved when it hooked
+// them. So we patch these slots before the pack does (CreateDevice of the
+// system IDirect3D9 class before its Direct3DCreate9 runs, the device and
+// texture slots when the device is created) and sit underneath it. The
+// replacements are told from the game's own textures (which pass through the
+// pack's CreateTexture hook) by the return address: in the pack, but not in
+// its hook. DXT1/DXT5 blocks get their two colour endpoints scaled (with the
+// DXT1 mode kept), A8R8G8B8 every pixel.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -46,6 +59,8 @@
 #include <string.h>
 #include <wchar.h>
 #include <stdlib.h>
+#include <intrin.h>
+#include <d3d9.h>
 #include "texpack.h"
 
 void Log(const char* fmt, ...);
@@ -54,6 +69,7 @@ namespace {
 
 HMODULE g_pack;
 FARPROC g_packCreate9;
+float g_brightness = 1.0f;
 
 // Replaces the file name at the end of the string in place (same length).
 bool SwapName(UNICODE_STRING* s, const wchar_t* from, const wchar_t* to, size_t n)
@@ -195,11 +211,195 @@ void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
     HeapFree(GetProcessHeap(), 0, recs);
 }
 
+// ---------------------------------------------------------------- brightness
+
+typedef HRESULT(STDMETHODCALLTYPE* CreateDevice_t)(IDirect3D9*, UINT, D3DDEVTYPE, HWND, DWORD, D3DPRESENT_PARAMETERS*, IDirect3DDevice9**);
+typedef HRESULT(STDMETHODCALLTYPE* CreateTexture_t)(IDirect3DDevice9*, UINT, UINT, UINT, DWORD, D3DFORMAT, D3DPOOL, IDirect3DTexture9**, HANDLE*);
+typedef HRESULT(STDMETHODCALLTYPE* LockRect_t)(IDirect3DTexture9*, UINT, D3DLOCKED_RECT*, const RECT*, DWORD);
+typedef HRESULT(STDMETHODCALLTYPE* UnlockRect_t)(IDirect3DTexture9*, UINT);
+
+CreateDevice_t o_createDevice;
+CreateTexture_t o_createTexture;
+LockRect_t o_lockRect;
+UnlockRect_t o_unlockRect;
+DWORD g_packStart, g_packEnd;  // the pack's image
+DWORD g_packCreateTexHook;     // its CreateTexture hook
+BYTE g_lut8[256], g_lut5[32], g_lut6[64];
+CRITICAL_SECTION g_lock;
+long g_brightened;  // replacements brightened so far
+
+// A replacement texture being filled.
+struct Upload {
+    IDirect3DTexture9* tex;
+    D3DFORMAT fmt;
+    DWORD levelsLeft;
+    UINT level;  // locked level, or ~0u
+    void* bits;
+    INT pitch;
+};
+Upload g_uploads[16];
+
+void* PatchSlot(void* obj, int index, void* hook)
+{
+    void** vt = *(void***)obj;
+    void* old = vt[index];
+    DWORD prot;
+    if (old == hook || !VirtualProtect(&vt[index], sizeof(void*), PAGE_EXECUTE_READWRITE, &prot)) return nullptr;
+    vt[index] = hook;
+    VirtualProtect(&vt[index], sizeof(void*), prot, &prot);
+    return old;
+}
+
+inline WORD Scale565(WORD c)
+{
+    return (WORD)(g_lut5[c >> 11] << 11 | g_lut6[(c >> 5) & 63] << 5 | g_lut5[c & 31]);
+}
+
+// DXT1: c0 > c1 means four colours, else three and transparent black; the
+// scaled endpoints keep that mode (swapped with the indices if needed).
+void ScaleDxt1Block(BYTE* b)
+{
+    WORD c0 = *(WORD*)b, c1 = *(WORD*)(b + 2);
+    DWORD idx = *(DWORD*)(b + 4);
+    WORD n0 = Scale565(c0), n1 = Scale565(c1);
+    if (c0 > c1) {
+        if (n0 < n1) { WORD t = n0; n0 = n1; n1 = t; idx ^= 0x55555555; }  // 0<->1, 2<->3
+        else if (n0 == n1) idx = 0;
+    } else if (n0 > n1) {
+        WORD t = n0; n0 = n1; n1 = t;
+        idx ^= ~(idx >> 1) & 0x55555555;  // 0<->1, 2 and 3 stay
+    }
+    *(WORD*)b = n0;
+    *(WORD*)(b + 2) = n1;
+    *(DWORD*)(b + 4) = idx;
+}
+
+void Brighten(const Upload& u, UINT w, UINT h)
+{
+    BYTE* row = (BYTE*)u.bits;
+    if (u.fmt == D3DFMT_DXT1 || u.fmt == D3DFMT_DXT5) {
+        UINT bw = (w + 3) / 4, bh = (h + 3) / 4;
+        for (UINT y = 0; y < bh; y++, row += u.pitch)
+            for (UINT x = 0; x < bw; x++) {
+                if (u.fmt == D3DFMT_DXT1) ScaleDxt1Block(row + x * 8);
+                else {
+                    WORD* c = (WORD*)(row + x * 16 + 8);  // always four colours
+                    c[0] = Scale565(c[0]);
+                    c[1] = Scale565(c[1]);
+                }
+            }
+    } else {
+        for (UINT y = 0; y < h; y++, row += u.pitch)
+            for (BYTE *p = row, *e = row + w * 4; p < e; p += 4) {
+                p[0] = g_lut8[p[0]];
+                p[1] = g_lut8[p[1]];
+                p[2] = g_lut8[p[2]];
+            }
+    }
+}
+
+bool FromPackItself(DWORD ret)
+{
+    return ret >= g_packStart && ret < g_packEnd && !(g_packCreateTexHook && ret - g_packCreateTexHook < 0x200);
+}
+
+HRESULT STDMETHODCALLTYPE LowLockRect(IDirect3DTexture9* t, UINT level, D3DLOCKED_RECT* lr, const RECT* r, DWORD f)
+{
+    HRESULT hr = o_lockRect(t, level, lr, r, f);
+    if (SUCCEEDED(hr) && lr && !r) {
+        EnterCriticalSection(&g_lock);
+        for (Upload& u : g_uploads)
+            if (u.tex == t) { u.level = level; u.bits = lr->pBits; u.pitch = lr->Pitch; }
+        LeaveCriticalSection(&g_lock);
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE LowUnlockRect(IDirect3DTexture9* t, UINT level)
+{
+    EnterCriticalSection(&g_lock);
+    for (Upload& u : g_uploads) {
+        if (u.tex != t || u.level != level) continue;
+        D3DSURFACE_DESC d;
+        if (SUCCEEDED(t->GetLevelDesc(level, &d))) Brighten(u, d.Width, d.Height);
+        u.level = ~0u;
+        if (--u.levelsLeft == 0) {
+            u.tex = nullptr;
+            long n = ++g_brightened;
+            if (n == 1 || n == 10 || n == 100 || n == 1000) Log("texture pack: %ld replacements brightened", n);
+        }
+    }
+    LeaveCriticalSection(&g_lock);
+    return o_unlockRect(t, level);
+}
+
+HRESULT STDMETHODCALLTYPE LowCreateTexture(IDirect3DDevice9* dev, UINT w, UINT h, UINT levels, DWORD usage,
+                                           D3DFORMAT fmt, D3DPOOL pool, IDirect3DTexture9** out, HANDLE* sh)
+{
+    DWORD ret = (DWORD)_ReturnAddress();
+    HRESULT hr = o_createTexture(dev, w, h, levels, usage, fmt, pool, out, sh);
+    if (SUCCEEDED(hr) && out && *out && pool == D3DPOOL_MANAGED && FromPackItself(ret) &&
+        (fmt == D3DFMT_DXT1 || fmt == D3DFMT_DXT5 || fmt == D3DFMT_A8R8G8B8)) {
+        EnterCriticalSection(&g_lock);
+        for (Upload& u : g_uploads)
+            if (!u.tex) {
+                u.tex = *out;
+                u.fmt = fmt;
+                u.levelsLeft = (*out)->GetLevelCount();
+                u.level = ~0u;
+                break;
+            }
+        LeaveCriticalSection(&g_lock);
+    }
+    return hr;
+}
+
+HRESULT STDMETHODCALLTYPE LowCreateDevice(IDirect3D9* d3d, UINT a, D3DDEVTYPE t, HWND w, DWORD f,
+                                          D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out)
+{
+    HRESULT hr = o_createDevice(d3d, a, t, w, f, pp, out);
+    if (SUCCEEDED(hr) && out && *out && !o_createTexture) {
+        o_createTexture = (CreateTexture_t)PatchSlot(*out, 23, (void*)LowCreateTexture);
+        IDirect3DTexture9* probe = nullptr;
+        if (o_createTexture &&
+            SUCCEEDED(o_createTexture(*out, 4, 4, 1, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &probe, nullptr)) && probe) {
+            o_lockRect = (LockRect_t)PatchSlot(probe, 19, (void*)LowLockRect);
+            o_unlockRect = (UnlockRect_t)PatchSlot(probe, 20, (void*)LowUnlockRect);
+            probe->Release();
+        }
+        Log("texture pack: brightness %.2f %s", g_brightness,
+            o_lockRect && o_unlockRect ? "installed" : "not installed (texture vtable)");
+    }
+    return hr;
+}
+
+void InstallBrightness()
+{
+    if (g_brightness == 1.0f) return;
+    for (int i = 0; i < 256; i++) { int v = (int)(i * g_brightness + 0.5f); g_lut8[i] = (BYTE)(v > 255 ? 255 : v); }
+    for (int i = 0; i < 32; i++) { int v = (int)(i * g_brightness + 0.5f); g_lut5[i] = (BYTE)(v > 31 ? 31 : v); }
+    for (int i = 0; i < 64; i++) { int v = (int)(i * g_brightness + 0.5f); g_lut6[i] = (BYTE)(v > 63 ? 63 : v); }
+    InitializeCriticalSection(&g_lock);
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)((BYTE*)g_pack + ((IMAGE_DOS_HEADER*)g_pack)->e_lfanew);
+    g_packStart = (DWORD)g_pack;
+    g_packEnd = g_packStart + nt->OptionalHeader.SizeOfImage;
+    char sys[MAX_PATH];
+    GetSystemDirectoryA(sys, MAX_PATH);
+    strncat(sys, "\\d3d9.dll", MAX_PATH - strlen(sys) - 1);
+    HMODULE d3d9 = LoadLibraryA(sys);
+    FARPROC create = d3d9 ? GetProcAddress(d3d9, "Direct3DCreate9") : nullptr;
+    IDirect3D9* d3d = create ? ((IDirect3D9 * (WINAPI*)(UINT))create)(D3D_SDK_VERSION) : nullptr;
+    if (!d3d) { Log("texture pack: brightness not installed (no system Direct3D)"); return; }
+    o_createDevice = (CreateDevice_t)PatchSlot(d3d, 16, (void*)LowCreateDevice);
+    d3d->Release();
+}
+
 }  // namespace
 
-void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const char* skip)
+void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const char* skip, float brightness)
 {
     if (!file || !*file) return;
+    g_brightness = brightness < 0.5f ? 0.5f : brightness > 2.0f ? 2.0f : brightness;
     char path[MAX_PATH], data[MAX_PATH];
     _snprintf(path, MAX_PATH, "%s%s", gameDir, file);
     _snprintf(data, MAX_PATH, "%sEvgesha.JK", gameDir);
@@ -249,8 +449,17 @@ void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const c
 void TexPack_HookSystem()
 {
     if (!g_packCreate9) return;
+    InstallBrightness();  // underneath the pack
     // Its Direct3DCreate9 hooks the system IDirect3D9 class (CreateDevice).
     IUnknown* d3d = ((IUnknown * (WINAPI*)(UINT))g_packCreate9)(32);
     if (d3d) d3d->Release();
     Log("texture pack: Direct3D interception installed (%p)", d3d);
 }
+
+void TexPack_DeviceCreated(IDirect3DDevice9* dev)
+{
+    // Before our own device hooks: the slot now holds the pack's CreateTexture hook.
+    DWORD hook = (DWORD)(*(void***)dev)[23];
+    if (!g_packCreateTexHook && hook >= g_packStart && hook < g_packEnd) g_packCreateTexHook = hook;
+}
+

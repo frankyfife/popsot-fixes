@@ -388,6 +388,24 @@ inverts the two hashes of skipped keys, so uploads never match them. The HD
 pack's font atlas `0B0041BB` (512×128) is replaced by a 256×64 image and is
 skipped by default.
 
+`[textures] brightness` (default 1.25) makes up for the HD pack's darker
+textures (compared in the same scene: about 0.8 of the original brightness in
+every brightness range). The pack creates each replacement (managed pool) with
+the `CreateTexture` it found in the device vtable and fills every level with
+`LockRect`/`UnlockRect` of the texture vtable, all called through the pointers
+it saved when it hooked these slots. The fix patches them first, so it sits
+underneath the pack: slot 16 of the system `IDirect3D9` class before the
+pack's `Direct3DCreate9`; in that `CreateDevice`, the device's `CreateTexture`
+(slot 23) and, through a probe texture, the texture class's `LockRect`/
+`UnlockRect` (slots 19/20). A texture counts as a replacement if the return
+address of its `CreateTexture` lies in the pack, but not within 0x200 bytes of
+the pack's own `CreateTexture` hook (read from the device vtable before our
+device hooks), through which the game's textures pass. On `UnlockRect` of such
+a texture the locked level is scaled: A8R8G8B8 per pixel, DXT5 the two colour
+endpoints, DXT1 the endpoints with the block mode kept (`c0 > c1` = four
+colours; if scaling changes the order, the endpoints are swapped and the
+indices remapped).
+
 ## Videos
 
 Videos are Bink 1 (`Video\*.int`, 640×448, cutscenes 640×346, one audio track per
