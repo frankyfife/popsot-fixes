@@ -921,7 +921,7 @@ static float g_menuCamSide = 0.0f;
 static bool g_uiAspect = true;  // [ui] aspect / scale, see ui.cpp
 static float g_uiScale = 1.0f;
 static char g_gameDir[MAX_PATH];
-static char g_texPack[MAX_PATH] = "d3d9.dll";  // [textures] pack / bloom, see texpack.cpp
+static char g_texPack[MAX_PATH] = "poptex_d3d9.dll";  // [textures] pack / bloom, see texpack.cpp
 static bool g_texPackBloom = true;
 static char g_texPackSkip[512] = "0B0041BB";  // with trailing backslash
 static bool g_loggedRefract;
@@ -1200,7 +1200,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             g_uiAspect = GetPrivateProfileIntA("ui", "aspect", 1, g_iniPath) != 0;
             GetPrivateProfileStringA("ui", "scale", "1", v, sizeof(v), g_iniPath);
             g_uiScale = (float)atof(v);
-            GetPrivateProfileStringA("textures", "pack", "d3d9.dll", g_texPack, sizeof(g_texPack), g_iniPath);
+            GetPrivateProfileStringA("textures", "pack", "poptex_d3d9.dll", g_texPack, sizeof(g_texPack), g_iniPath);
             g_texPackBloom = GetPrivateProfileIntA("textures", "bloom", 1, g_iniPath) != 0;
             GetPrivateProfileStringA("textures", "skip", "0B0041BB", g_texPackSkip, sizeof(g_texPackSkip), g_iniPath);
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);

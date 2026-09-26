@@ -352,7 +352,10 @@ name in the main module's loader entry and in the process parameters reads
 `POP.EXE` (same length as `gpp.exe`, changed in place and restored right after).
 Before our own system vtable hooks, the pack's `Direct3DCreate9` is called once
 so that it hooks `CreateDevice`; the chain is our hooks -> pack -> system d3d9,
-underneath GOG's wrapper.
+underneath GOG's wrapper. The DLL must not keep the name `d3d9.dll`: modules
+that look Direct3D up by name get the pack instead, and the GOG Galaxy overlay
+(`proxydx9_Win32_Release.dll`) then reads past the end of its image and crashes;
+the default name is `poptex_d3d9.dll`.
 
 Pack options are baked into the DLL's `.popcfg` section (`PTEX`, 1, flags,
 `PCFG`). Flag bit 0 makes its `CreatePixelShader` hook replace the bloom shader

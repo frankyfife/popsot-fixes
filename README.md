@@ -117,9 +117,11 @@ the fix loads the pack itself.
 Installation:
 1. Install this fix (see above).
 2. Download the HD texture pack from Evgeshajk's Nexus Mods page and copy both files
-   from its archive, `d3d9.dll` and `Evgesha.JK`, into the game folder, next to `dx.dll`.
-3. Start the game. `popfix.log` reports "texture pack: d3d9.dll loaded"; the pack writes
-   its own messages to `poptex_d3d9.log`.
+   from its archive into the game folder, next to `dx.dll`: `Evgesha.JK` as it is, and
+   `d3d9.dll` **renamed to `poptex_d3d9.dll`**. Named `d3d9.dll`, it is mistaken for
+   Direct3D by the GOG Galaxy overlay, which then crashes the game.
+3. Start the game. `popfix.log` reports "texture pack: poptex_d3d9.dll loaded"; the pack
+   writes its own messages to `poptex_d3d9.log`.
 
 Notes:
 * The pack's font replacement is only half the original resolution (256×64 instead of
@@ -155,7 +157,7 @@ file is the default.
 | `[post] blur_radius` | `auto` | blur width, 1 = original, auto = like an upscaling emulator |
 | `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
-| `[textures] pack` | `d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
+| `[textures] pack` | `poptex_d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
 | `[textures] bloom` | `1` | keep the game's bloom (the HD pack would remove it) |
 | `[textures] skip` | `0B0041BB` | pack textures to leave to the game (hex keys from `poptex_d3d9.log`; default: the font) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |

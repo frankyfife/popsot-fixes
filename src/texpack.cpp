@@ -17,6 +17,11 @@
 // hooks. The chain is then: our hooks -> pack -> system d3d9, underneath GOG's
 // wrapper. Messages of the pack go to poptex_d3d9.log.
 //
+// The pack's DLL has to be renamed (default poptex_d3d9.dll): as d3d9.dll in
+// the game folder it is taken for the system d3d9.dll by modules that look it
+// up by name - the GOG Galaxy overlay (proxydx9) then reads past its end and
+// crashes the game.
+//
 // Pack options are baked into the DLL's ".popcfg" section ("PTEX", version,
 // flags, "PCFG"). Flag bit 0 replaces the game's bloom pixel shader (ABB07F2E)
 // with one without bloom; the HD pack sets it, the 4K pack does not. The flag
@@ -199,7 +204,14 @@ void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const c
     _snprintf(path, MAX_PATH, "%s%s", gameDir, file);
     _snprintf(data, MAX_PATH, "%sEvgesha.JK", gameDir);
     path[MAX_PATH - 1] = data[MAX_PATH - 1] = 0;
-    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) return;
+    if (GetFileAttributesA(path) == INVALID_FILE_ATTRIBUTES) {
+        char old[MAX_PATH];
+        _snprintf(old, MAX_PATH, "%sd3d9.dll", gameDir);
+        old[MAX_PATH - 1] = 0;
+        if (GetFileAttributesA(old) != INVALID_FILE_ATTRIBUTES && GetFileAttributesA(data) != INVALID_FILE_ATTRIBUTES)
+            Log("texture pack: rename the pack's d3d9.dll to %s (as d3d9.dll it crashes the GOG Galaxy overlay)", file);
+        return;
+    }
     if (GetFileAttributesA(data) == INVALID_FILE_ATTRIBUTES) {
         Log("texture pack: %s found but no Evgesha.JK, not loaded", file);
         return;
