@@ -106,6 +106,14 @@ EAX is emulated and output follows the Windows speaker setup (stereo, headphones
 5.1, 7.1). 3D audio and EAX are switched on automatically (`[sound] eax`). DSOAL is not
 included in this project.
 
+### Texture packs
+Texture packs made with *PoP Texture Studio* (a `d3d9.dll` and an `Evgesha.JK`, e.g.
+the HD texture pack on Nexus Mods) are written for the retail `POP.EXE` and stay inactive
+in the GOG version: `gpp.exe` never loads a `d3d9.dll`, and the pack refuses to run
+under another executable name. The GOG game data is identical, so the fix loads the
+pack itself: put both files into the game folder (`[textures] pack`). Tested with the HD
+pack; the 4K pack may exceed the memory of the 32-bit game.
+
 ### Level select
 The main menu gets the developer's **Special Load** entry, which is hidden in the PC
 release: it lists every level of the game and loads it directly.
@@ -128,6 +136,7 @@ file is the default.
 | `[post] blur_radius` | `auto` | blur width, 1 = original, auto = like an upscaling emulator |
 | `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
+| `[textures] pack` | `d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
 | `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |

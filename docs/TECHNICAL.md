@@ -334,6 +334,26 @@ camera when it starts. Game input is withheld by the `GetActionValue` and stick 
 Y / P sets the main loop's pause flag `0xaf4498` (`0x67ad90` then only renders), which
 freezes the world while the camera keeps moving.
 
+## Texture packs
+
+PoP Texture Studio packs (`d3d9.dll` proxy + `Evgesha.JK`) replace textures when
+they are uploaded (keyed by content, patched into the system `IDirect3D9` /
+`IDirect3DDevice9` vtables) and overlay 158 exact byte ranges of `prince.bf`
+(through `CreateFileA`/`CreateFileW`/`ReadFile`/`CloseHandle` patched in the
+executable's import table). The GOG `prince.bf` matches (size 410720256 and the
+SHA-256 of every overlaid range). Two things keep them inactive in the GOG
+version: `gpp.exe` imports `dx.dll`, and GOG's wrapper loads the system
+`d3d9.dll` by its full path, so the proxy is never loaded; and its `DllMain`
+compares the executable's name with `POP.EXE`.
+
+**Fix (`texpack.cpp`):** `dx.dll` loads the pack from its own `DllMain` (before
+the game opens `prince.bf`). While the pack's `DllMain` runs, the executable's
+name in the main module's loader entry and in the process parameters reads
+`POP.EXE` (same length as `gpp.exe`, changed in place and restored right after).
+Before our own system vtable hooks, the pack's `Direct3DCreate9` is called once
+so that it hooks `CreateDevice`; the chain is our hooks -> pack -> system d3d9,
+underneath GOG's wrapper.
+
 ## Videos
 
 Videos are Bink 1 (`Video\*.int`, 640×448, cutscenes 640×346, one audio track per

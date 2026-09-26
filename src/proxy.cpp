@@ -31,6 +31,7 @@
 #include "ui.h"
 #include "sound.h"
 #include "video.h"
+#include "texpack.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -919,7 +920,8 @@ static float g_menuCamUp = 6.25f;
 static float g_menuCamSide = 0.0f;
 static bool g_uiAspect = true;  // [ui] aspect / scale, see ui.cpp
 static float g_uiScale = 1.0f;
-static char g_gameDir[MAX_PATH];  // with trailing backslash
+static char g_gameDir[MAX_PATH];
+static char g_texPack[MAX_PATH] = "d3d9.dll";  // [textures] pack, see texpack.cpp  // with trailing backslash
 static bool g_loggedRefract;
 char g_iniPath[MAX_PATH];
 
@@ -1078,6 +1080,7 @@ static void EnsureSystemHooks()
     static bool done;
     if (done) return;
     done = true;
+    TexPack_HookSystem();  // underneath our hooks
     if (p_sysCreate9) {
         IDirect3D9* t = ((IDirect3D9 * (WINAPI*)(UINT))p_sysCreate9)(D3D_SDK_VERSION);
         if (t) { HookD3D(t, false); t->Release(); }
@@ -1195,6 +1198,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             g_uiAspect = GetPrivateProfileIntA("ui", "aspect", 1, g_iniPath) != 0;
             GetPrivateProfileStringA("ui", "scale", "1", v, sizeof(v), g_iniPath);
             g_uiScale = (float)atof(v);
+            GetPrivateProfileStringA("textures", "pack", "d3d9.dll", g_texPack, sizeof(g_texPack), g_iniPath);
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
         }
@@ -1204,6 +1208,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             Sound_SetForceEax(GetPrivateProfileIntA("sound", "eax", 1, g_iniPath) != 0);
             Sound_Install(g_gameDir);
             Video_Install(GetPrivateProfileIntA("video", "keep_aspect", 1, g_iniPath) != 0);
+            TexPack_Load(g_gameDir, g_texPack);
             strcpy(slash + 1, "dx_gog.dll");
         }
         g_gog = LoadLibraryA(path);
