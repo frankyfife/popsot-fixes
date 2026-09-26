@@ -360,6 +360,17 @@ Pack options are baked into the DLL's `.popcfg` section (`PTEX`, 1, flags,
 the hook reads the flag on every call, so `[textures] bloom=1` clears it in
 memory after loading.
 
+`[textures] skip` leaves single textures to the game. `Evgesha.JK` starts with a
+0x90-byte header (`EVGJK1`, texture count at `+0x18`, overlay count at `+0x1c`,
+overlay index offset at `+0x38`) followed by 0x68-byte texture records (key at
+`+0`, original size at `+4`, replacement size at `+0xa`, payload offset and size
+at `+0x18`, two SHA-256 hashes at `+0x28`). The pack copies the records into a
+heap table (larger records, same key first); the fix finds it through a pointer
+in the pack's writable sections whose first two keys match the file, and
+inverts the two hashes of skipped keys, so uploads never match them. The HD
+pack's font atlas `0B0041BB` (512×128) is replaced by a 256×64 image and is
+skipped by default.
+
 ## Videos
 
 Videos are Bink 1 (`Video\*.int`, 640×448, cutscenes 640×346, one audio track per

@@ -22,6 +22,17 @@
 // with one without bloom; the HD pack sets it, the 4K pack does not. The flag
 // is read whenever a pixel shader is created, so with [textures] bloom=1 we
 // clear it in memory after loading and the game keeps its bloom.
+//
+// Single textures can be left out ([textures] skip, hex keys as in
+// poptex_d3d9.log). The HD pack replaces the font atlas 0B0041BB (512x128)
+// with a 256x64 one, which blurs every text; it is skipped by default.
+// Evgesha.JK starts with a 0x90-byte header (texture count at +0x18) and the
+// texture records (0x68 bytes, key at +0). The pack copies them into a heap
+// table of larger records (key at +0, and the two SHA-256 hashes from file
+// record +0x28 it matches uploads and verifies payloads with); we find that
+// table through a pointer in the pack's data section (its first two keys are
+// those of the file), and invalidate the hashes of skipped keys, so they never
+// match and the game keeps its own texture.
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -29,6 +40,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <wchar.h>
+#include <stdlib.h>
 #include "texpack.h"
 
 void Log(const char* fmt, ...);
@@ -90,9 +102,97 @@ DWORD* PackFlags(HMODULE mod)
     return nullptr;
 }
 
+bool Readable(const void* p, size_t n)
+{
+    MEMORY_BASIC_INFORMATION mi;
+    if (!VirtualQuery(p, &mi, sizeof(mi)) || mi.State != MEM_COMMIT) return false;
+    if (mi.Protect & (PAGE_NOACCESS | PAGE_GUARD)) return false;
+    return (BYTE*)p + n <= (BYTE*)mi.BaseAddress + mi.RegionSize;
+}
+
+// Leaves the textures with the keys in `list` (hex, separated by commas or
+// spaces) to the game.
+void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
+{
+    DWORD keys[64];
+    int nkeys = 0;
+    for (const char* s = list; *s && nkeys < 64;) {
+        char* end;
+        unsigned long k = strtoul(s, &end, 16);
+        if (end == s) { s++; continue; }
+        keys[nkeys++] = k;
+        s = end;
+    }
+    if (!nkeys) return;
+    // Header and texture records from the file.
+    HANDLE f = CreateFileA(jkPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+    if (f == INVALID_HANDLE_VALUE) return;
+    BYTE head[0x90];
+    DWORD got = 0;
+    BYTE* recs = nullptr;
+    DWORD count = 0;
+    if (ReadFile(f, head, sizeof(head), &got, nullptr) && got == sizeof(head) && memcmp(head, "EVGJK1", 6) == 0) {
+        count = *(DWORD*)(head + 0x18);
+        if (count >= 2 && count <= 10000) {
+            recs = (BYTE*)HeapAlloc(GetProcessHeap(), 0, count * 0x68);
+            if (recs && !(ReadFile(f, recs, count * 0x68, &got, nullptr) && got == count * 0x68)) {
+                HeapFree(GetProcessHeap(), 0, recs);
+                recs = nullptr;
+            }
+        }
+    }
+    CloseHandle(f);
+    if (!recs) return;
+    DWORD key0 = *(DWORD*)recs, key1 = *(DWORD*)(recs + 0x68);
+    // The pack's table: a pointer in its writable sections to key0 ... key1.
+    BYTE* base = (BYTE*)mod;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    IMAGE_SECTION_HEADER* sec = IMAGE_FIRST_SECTION(nt);
+    BYTE* table = nullptr;
+    DWORD stride = 0;
+    for (int i = 0; i < nt->FileHeader.NumberOfSections && !table; i++, sec++) {
+        if (!(sec->Characteristics & IMAGE_SCN_MEM_WRITE)) continue;
+        BYTE** p = (BYTE**)(base + sec->VirtualAddress);
+        BYTE** end = (BYTE**)(base + sec->VirtualAddress + sec->Misc.VirtualSize);
+        for (; p < end && !table; p++) {
+            BYTE* t = *p;
+            if ((ULONG_PTR)t < 0x10000 || ((ULONG_PTR)t & 3) || !Readable(t, 4) || *(DWORD*)t != key0) continue;
+            for (DWORD st = 0x68; st <= 0x100; st += 4)
+                if (Readable(t + st, 4) && *(DWORD*)(t + st) == key1 && Readable(t, (size_t)st * count)) {
+                    table = t;
+                    stride = st;
+                    break;
+                }
+        }
+    }
+    if (!table) {
+        Log("texture pack: texture table not found, [textures] skip not applied");
+    } else {
+        for (int k = 0; k < nkeys; k++) {
+            const char* result = "not in the pack";
+            for (DWORD i = 0; i < count; i++) {
+                const BYTE* frec = recs + i * 0x68;
+                if (*(const DWORD*)frec != keys[k]) continue;
+                // The two hashes (file record +0x28, 64 bytes) inside the pack's copy.
+                BYTE* rec = table + i * stride;
+                result = "not changed (hashes not found)";
+                for (DWORD o = 4; o + 64 <= stride; o += 4)
+                    if (memcmp(rec + o, frec + 0x28, 64) == 0) {
+                        for (int b = 0; b < 64; b++) rec[o + b] ^= 0xA5;
+                        result = "left to the game ([textures] skip)";
+                        break;
+                    }
+                break;
+            }
+            Log("texture pack: texture %08lX %s", keys[k], result);
+        }
+    }
+    HeapFree(GetProcessHeap(), 0, recs);
+}
+
 }  // namespace
 
-void TexPack_Load(const char* gameDir, const char* file, bool keepBloom)
+void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const char* skip)
 {
     if (!file || !*file) return;
     char path[MAX_PATH], data[MAX_PATH];
@@ -122,6 +222,7 @@ void TexPack_Load(const char* gameDir, const char* file, bool keepBloom)
     g_packCreate9 = GetProcAddress(g_pack, "Direct3DCreate9");
     Log("texture pack: %s loaded%s; its messages are in poptex_d3d9.log", file,
         renamed ? " (shown as POP.EXE while it started)" : "");
+    SkipTextures(g_pack, data, skip);
     DWORD* flags = PackFlags(g_pack);
     if (flags && keepBloom && (*flags & 1)) {
         DWORD prot;

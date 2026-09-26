@@ -107,12 +107,31 @@ EAX is emulated and output follows the Windows speaker setup (stereo, headphones
 included in this project.
 
 ### Texture packs
-Texture packs made with *PoP Texture Studio* (a `d3d9.dll` and an `Evgesha.JK`, e.g.
-the HD texture pack on Nexus Mods) are written for the retail `POP.EXE` and stay inactive
-in the GOG version: `gpp.exe` never loads a `d3d9.dll`, and the pack refuses to run
-under another executable name. The GOG game data is identical, so the fix loads the
-pack itself: put both files into the game folder (`[textures] pack`). Tested with the HD
-pack; the 4K pack may exceed the memory of the 32-bit game.
+The HD texture pack by [Evgeshajk](https://www.nexusmods.com/profile/Evgeshajk) (made with
+*PoP Texture Studio*) works with the GOG version through this fix. The pack is written for
+the retail `POP.EXE` and stays inactive in the GOG version on its own: `gpp.exe` never
+loads a `d3d9.dll`, and the pack refuses to run under another executable name. The GOG
+game data is identical to the retail data (every patched part of `prince.bf` matches), so
+the fix loads the pack itself.
+
+Installation:
+1. Install this fix (see above).
+2. Download the HD texture pack from Evgeshajk's Nexus Mods page and copy both files
+   from its archive, `d3d9.dll` and `Evgesha.JK`, into the game folder, next to `dx.dll`.
+3. Start the game. `popfix.log` reports "texture pack: d3d9.dll loaded"; the pack writes
+   its own messages to `poptex_d3d9.log`.
+
+Notes:
+* The pack's font replacement is only half the original resolution (256×64 instead of
+  512×128) and blurs every text, so the fix leaves the original font in place
+  (`[textures] skip`).
+* The HD pack also removes the game's bloom (glow around bright light); the fix keeps
+  it (`[textures] bloom`).
+* The 4K pack was not tested. The game is a 32-bit program limited to 2 GB of memory,
+  which the 4K textures may exceed.
+* To play without the pack, remove the two files or set `[textures] pack=` (empty).
+
+All credit for the textures goes to Evgeshajk; the pack is not part of this project.
 
 ### Level select
 The main menu gets the developer's **Special Load** entry, which is hidden in the PC
@@ -138,6 +157,7 @@ file is the default.
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
 | `[textures] pack` | `d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
 | `[textures] bloom` | `1` | keep the game's bloom (the HD pack would remove it) |
+| `[textures] skip` | `0B0041BB` | pack textures to leave to the game (hex keys from `poptex_d3d9.log`; default: the font) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
 | `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
