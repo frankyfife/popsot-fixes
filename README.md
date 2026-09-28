@@ -134,7 +134,10 @@ Notes:
   1 = as in the pack).
 * 32 textures of the HD pack are empty (black or fully transparent), e.g. walls and
   floor of the treasure vault at the start, which then show black. The fix finds them
-  when the pack loads and keeps the game's own textures there.
+  when the pack loads and keeps the game's own textures there. If you also have the 4K
+  pack, `tools/repair_hd_pack.py` fills 31 of them with its versions scaled down to the
+  HD size (Python 3 with Pillow 11.2+ and numpy; writes `Evgesha.JK.bak` first):
+  `python repair_hd_pack.py "<game folder>\Evgesha.JK" "<4K pack>.zip"`
 * The 4K pack was not tested. The game is a 32-bit program limited to 2 GB of memory,
   which the 4K textures may exceed.
 * To play without the pack, remove the two files or set `[textures] pack=` (empty).

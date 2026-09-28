@@ -398,6 +398,15 @@ if those are empty, about 0.2 s for all 1945 textures), decodes the DXT blocks
 and skips every texture with fewer than 1 % visible pixels (brightest channel
 and alpha above 8) in the same way as `[textures] skip`.
 
+The 4K pack has 31 of these textures intact (`4B0025A7` is transparent there
+too). `tools/repair_hd_pack.py` scales them down to the HD records' size, format
+and mip levels (a side is halved per level only while it is 9 or more, as the
+pack lays out every payload), writes them over the empty payloads and updates
+the payload SHA-256 (record `+0x48`) and the header's index hash (`+0x70`,
+SHA-256 of the texture index followed by the overlay index), which the pack
+checks when it starts ("Evgesha.JK index hash changed" otherwise). The hash of
+the original texture (`+0x28`) stays as it is.
+
 `[textures] brightness` (default 1.25) makes up for the HD pack's darker
 textures (compared in the same scene: about 0.8 of the original brightness in
 every brightness range). The pack creates each replacement (managed pool) with
