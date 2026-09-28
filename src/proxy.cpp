@@ -32,6 +32,7 @@
 #include "sound.h"
 #include "video.h"
 #include "texpack.h"
+#include "cheats.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -736,6 +737,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     }
     MenuPad_OnPresent();
     MenuCam_OnPresent(keys);
+    Cheats_OnPresent(keys);
     Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
     if (g_verbose) Trace_ProbeMenuManager();
@@ -1229,6 +1231,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             Sound_Install(g_gameDir);
             Video_Install(GetPrivateProfileIntA("video", "keep_aspect", 1, g_iniPath) != 0);
             TexPack_Load(g_gameDir, g_texPack, g_texPackBloom, g_texPackSkip, g_texPackBrightness);
+            Cheats_Install(g_iniPath);
             strcpy(slash + 1, "dx_gog.dll");
         }
         g_gog = LoadLibraryA(path);
