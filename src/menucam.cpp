@@ -543,16 +543,45 @@ void MenuCam_Install(float forward, float up, float side)
     Log("menu camera: enabled, camera_forward %.2f camera_up %.2f camera_side %.2f", g_forward, g_up, g_side);
 }
 
+// Keys and buttons that went down since the last frame. Their state is followed
+// every frame, and only while the game has the keyboard (`keys`), so neither a
+// key pressed in another program nor a button held when the free camera comes
+// on counts as a press. (The low bit of GetAsyncKeyState, "pressed since the
+// last call", reported such old presses and stored both menu poses as soon as
+// the free camera was switched on in a level.)
+struct Presses {
+    bool f6, f7, f9, x, b, back;
+};
+
+Presses ReadPresses(bool keys)
+{
+    static bool down[6];
+    bool now[6] = {};
+    if (keys) {
+        now[0] = GetAsyncKeyState(VK_F6) < 0;
+        now[1] = GetAsyncKeyState(VK_F7) < 0;
+        now[2] = GetAsyncKeyState(VK_F9) < 0;
+        XINPUT_GAMEPAD pad;
+        if (Gamepad_Read(&pad)) {
+            now[3] = (pad.wButtons & XINPUT_GAMEPAD_X) != 0;
+            now[4] = (pad.wButtons & XINPUT_GAMEPAD_B) != 0;
+            now[5] = (pad.wButtons & XINPUT_GAMEPAD_BACK) != 0;
+        }
+    }
+    bool p[6];
+    for (int i = 0; i < 6; i++) {
+        p[i] = now[i] && !down[i];
+        down[i] = now[i];
+    }
+    return { p[0], p[1], p[2], p[3], p[4], p[5] };
+}
+
 void MenuCam_OnPresent(bool keys)
 {
     if (!g_installed) return;
+    Presses in = ReadPresses(keys);
     // Free camera toggle: F9 or the controller's Back (View) button.
-    static bool backDown;
-    XINPUT_GAMEPAD pad;
-    bool back = keys && Gamepad_Read(&pad) && (pad.wButtons & XINPUT_GAMEPAD_BACK);
-    bool toggle = (back && !backDown) || (keys && (GetAsyncKeyState(VK_F9) & 1));
-    backDown = back;
-    if (toggle) {
+    if (in.f9 || in.back) {
         if (g_free.active) StopFreeCam();
         else StartFreeCam();
     }
@@ -561,22 +590,16 @@ void MenuCam_OnPresent(bool keys)
     if (g_free.active) {
         // F6 / X and F7 / B store the free camera as the menu picture and as
         // the end of the new-game flight; Ctrl+F6 / Ctrl+F7 clear them.
-        static bool xDown, bDown;
-        bool read = Gamepad_Read(&pad);
-        bool x = read && (pad.wButtons & XINPUT_GAMEPAD_X);
-        bool b = read && (pad.wButtons & XINPUT_GAMEPAD_B);
         bool ctrl = GetAsyncKeyState(VK_CONTROL) < 0;
-        if ((x && !xDown) || (GetAsyncKeyState(VK_F6) & 1)) SavePose(0, ctrl && !x);
-        if ((b && !bDown) || (GetAsyncKeyState(VK_F7) & 1)) SavePose(1, ctrl && !b);
-        xDown = x;
-        bDown = b;
+        if (in.x || in.f6) SavePose(0, ctrl && !in.x);
+        if (in.b || in.f7) SavePose(1, ctrl && !in.b);
         return;
     }
     // F6 / F7 move the menu camera closer / further, with Shift down / up and
     // with Ctrl left / right.
     int dir = 0;
-    if (GetAsyncKeyState(VK_F6) & 1) dir = -1;
-    if (GetAsyncKeyState(VK_F7) & 1) dir = 1;
+    if (in.f6) dir = -1;
+    if (in.f7) dir = 1;
     if (!dir) return;
     if (GetAsyncKeyState(VK_SHIFT) < 0) g_up += dir * 0.25f;
     else if (GetAsyncKeyState(VK_CONTROL) < 0) g_side += dir * 0.25f;

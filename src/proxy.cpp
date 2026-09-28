@@ -685,11 +685,23 @@ static HRESULT STDMETHODCALLTYPE hk_SetVertexShader(IDirect3DDevice9* dev, IDire
     return o_SetVertexShader(dev, vs);
 }
 
+// A key that went down since the last frame while the game has the keyboard
+// (the low bit of GetAsyncKeyState also reports presses in other programs).
+static bool KeyPressed(int vk, bool& down, bool keys)
+{
+    bool now = keys && GetAsyncKeyState(vk) < 0;
+    bool pressed = now && !down;
+    down = now;
+    return pressed;
+}
+
 static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* sr, const RECT* dr, HWND w,
                                             const RGNDATA* rgn)
 {
     static unsigned frames;
-    if (GetAsyncKeyState(VK_F10) & 1) {
+    static bool f8Down, f10Down;
+    bool keys = !g_gameWindow || GetForegroundWindow() == g_gameWindow;
+    if (KeyPressed(VK_F10, f10Down, keys)) {
         if (GetAsyncKeyState(VK_CONTROL) < 0) {
             // Ctrl+F10: the full-screen blur effect on / off, for comparison.
             unsigned char* fn = (unsigned char*)0x00670710;
@@ -710,7 +722,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         }
     }
     if (g_capture > 0 && --g_capture == 0) Log("cap: ---- end of frame capture");
-    if (GetAsyncKeyState(VK_F8) & 1) {
+    if (KeyPressed(VK_F8, f8Down, keys)) {
         g_capture = 2;  // the frame after this Present
         g_dumps = 0;
         Log("cap: ---- F8 frame capture");
@@ -723,7 +735,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
         frames = 0;
     }
     MenuPad_OnPresent();
-    MenuCam_OnPresent(!g_gameWindow || GetForegroundWindow() == g_gameWindow);
+    MenuCam_OnPresent(keys);
     Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
     if (g_verbose) Trace_ProbeMenuManager();
