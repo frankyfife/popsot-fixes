@@ -1,5 +1,5 @@
 # Exports the game's Bink videos (Video\*.int) as lossless-quality ProRes files
-# for upscaling (e.g. Topaz Video AI). Only the picture is exported: the game
+# for upscaling (e.g. Real-ESRGAN). Only the picture is exported: the game
 # keeps playing the original Bink file for sound, timing and language tracks.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File export_videos.ps1 `

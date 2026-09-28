@@ -94,9 +94,14 @@ The videos are shown with their correct aspect ratio instead of stretched. Upsca
 versions can be added without converting them back to Bink: put `<name>.mp4` next to
 `Video\<name>.int`, and the game shows its picture while the original file still
 provides sound (all languages), timing and skipping. `tools\export_videos.ps1` exports
-the originals as ProRes for an upscaler such as Topaz Video AI. Any size up to
-4096×4096 and any frame rate work; H.264 always, H.265/AV1 with the Windows codec
-extensions.
+the originals as ProRes for upscaling. Any size up to 4096×4096 and any frame rate
+work; H.264 always, H.265/AV1 with the Windows codec extensions.
+
+Our own set was made with [Real-ESRGAN](https://github.com/xinntao/Real-ESRGAN)
+(`realesrgan-ncnn-vulkan`, model `realesrgan-x4plus`, 4× on the single frames) and
+encoded as H.264 with the original frame rate. Small burned-in text (copyright lines,
+logo captions) comes out garbled from any AI upscaler, so it was set again in matching
+fonts on the upscaled frames instead.
 
 ### EAX and surround sound
 The game's EAX 2 reverb and 3D sound need hardware DirectSound3D, which Windows no
