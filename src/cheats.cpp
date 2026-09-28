@@ -28,6 +28,17 @@
 // life is a hit counter at +0x7c, and a hit that finds it at 0 takes the death
 // path, so a hit sent by the prince (message +0) clears it first.
 //
+// Menu: the game options page (P_GameOptions, also reached from the pause
+// menu) still has four rows the PC release hides: labels SetupMenu, Cheats,
+// Interface, WorkInProgress, each with On / Off buttons (<name>On, <name>Off).
+// When the page is shown (0x4048b0) the labels get the caption " " and the
+// buttons are hidden, then 0x404510 refreshes the page. After that refresh we
+// caption the first three labels with our cheats, show their buttons and mark
+// the active one, all through the page's own helpers (cdecl, by element name):
+// 0x403850 caption (a wide string), 0x4032e0 visible, 0x403280 selected. Clicks go to
+// 0x404690 (argument: the element, its name at +4); ours are handled there
+// with the page's click sound (0x402ab0).
+//
 // Keys (in the game window): Ctrl+F1 invulnerable, Ctrl+F2 infinite sand,
 // Ctrl+F3 one-hit kills, Ctrl+F5 dumps the prince's variables to
 // popfix_dump_<n>.bin (for finding further values). One buzz = on, two = off.
@@ -39,6 +50,7 @@
 #include <string.h>
 #include "cheats.h"
 #include "gamepad.h"
+#include "ui.h"
 
 void Log(const char* fmt, ...);
 
@@ -56,6 +68,20 @@ const DWORD kEnemyHit = 0x00602a60;
 // sub esp, 0x124; mov eax, [0xabc930]
 const unsigned char kEnemyHitPrologue[] = { 0x81, 0xEC, 0x24, 0x01, 0x00, 0x00, 0xA1, 0x30, 0xC9, 0xAB, 0x00 };
 const DWORD kEnemyHits = 0x7c;
+
+const DWORD kOptionsRefresh = 0x00404510;
+// push -1; push 0x7a0e90; mov eax, fs:[0]
+const unsigned char kOptionsRefreshPrologue[] = { 0x6A, 0xFF, 0x68, 0x90, 0x0E, 0x7A, 0x00, 0x64, 0xA1, 0x00, 0x00, 0x00, 0x00 };
+const DWORD kOptionsClick = 0x00404690;
+// push ebx; push esi; push edi; mov edi, [esp + 0x10]
+const unsigned char kOptionsClickPrologue[] = { 0x53, 0x56, 0x57, 0x8B, 0x7C, 0x24, 0x10 };
+typedef void(__cdecl* ElementSetText_t)(const char* name, const wchar_t* text);
+typedef void(__cdecl* ElementSetFlag_t)(const char* name, int on);
+typedef int(__cdecl* MenuSound_t)(int sound);
+const ElementSetText_t ElementCaption = (ElementSetText_t)0x00403850;
+const ElementSetFlag_t ElementVisible = (ElementSetFlag_t)0x004032e0;
+const ElementSetFlag_t ElementSelected = (ElementSetFlag_t)0x00403280;
+const MenuSound_t MenuSound = (MenuSound_t)0x00402ab0;
 
 char g_ini[MAX_PATH];
 char g_dir[MAX_PATH];
@@ -105,12 +131,81 @@ Keys ReadKeys(bool keys)
     return { keys && GetAsyncKeyState(VK_CONTROL) < 0, p[0], p[1], p[2], p[3] };
 }
 
-void Toggle(bool& flag, const char* key, const char* name)
+void Set(bool& flag, bool on, const char* key, const char* name)
 {
-    flag = !flag;
+    flag = on;
     WritePrivateProfileStringA("cheats", key, flag ? "1" : "0", g_ini);
     Log("cheats: %s %s", name, flag ? "on" : "off");
+}
+
+void Toggle(bool& flag, const char* key, const char* name)
+{
+    Set(flag, !flag, key, name);
     Gamepad_Pulse(flag ? 1 : 2);
+}
+
+// The game options rows we use.
+struct Row {
+    const char* label;
+    const char* on;
+    const char* off;
+    bool* flag;
+    const char* key;
+    const char* name;
+    const wchar_t* german;
+    const wchar_t* english;
+};
+const Row kRows[] = {
+    { "SetupMenu", "SetupMenuOn", "SetupMenuOff", &g_invulnerable, "invulnerable", "invulnerable", L"Unverwundbar",
+      L"Invulnerable" },
+    { "Cheats", "CheatsOn", "CheatsOff", &g_infiniteSand, "infinite_sand", "infinite sand", L"Unendlich Sand",
+      L"Infinite sand" },
+    { "Interface", "InterfaceOn", "InterfaceOff", &g_oneHitKills, "one_hit_kills", "one-hit kills",
+      L"Ein Treffer reicht", L"One-hit kills" },
+};
+bool g_menu;  // menu hooks installed
+
+// An element of the current menu page (0x712440 on the menu manager gives the
+// page, 0x712240 searches its elements by name, as the page's helpers do).
+BYTE* Element(const char* name)
+{
+    BYTE* mgr = *(BYTE**)0x0080bbd8;
+    if (!Readable(mgr, 0x20)) return nullptr;
+    mgr += 0xc;
+    BYTE* page = nullptr;
+    __asm {
+        mov ecx, mgr
+        push 0
+        mov eax, 0x00712440
+        call eax
+        mov page, eax
+    }
+    if (!Readable(page, 0x30)) return nullptr;
+    return ((BYTE*(__cdecl*)(BYTE*, const char*))0x00712240)(page, name);
+}
+
+// The dark panel behind the rows (BlackRectangle, virtual 640x480 lines 130 to
+// 286) ends below the tutorials row. Its rect is set again from the layout
+// every frame before drawing, so the quad itself is moved while the game
+// options page is shown. Its texture has frayed, transparent margins (about
+// 13.5 % of the height at the top, 8.5 % at the bottom): lines 109 to 419 keep
+// the visible top at line 151 as before and end 25 lines below our last row
+// (368), like below the tutorials row.
+void StretchPanel()
+{
+    Ui_MoveQuadRows(Element("SetupMenuOn") != nullptr, 130, 286, 109, 419);
+}
+
+void ShowRows()
+{
+    bool german = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN;
+    for (const Row& r : kRows) {
+        ElementCaption(r.label, german ? r.german : r.english);
+        ElementVisible(r.on, 1);
+        ElementVisible(r.off, 1);
+        ElementSelected(r.on, *r.flag);
+        ElementSelected(r.off, !*r.flag);
+    }
 }
 
 void Dump()
@@ -155,6 +250,31 @@ void* Detour(DWORD addr, const unsigned char* prologue, size_t len, void* hook)
 extern "C" {
 void* g_cheatEnemyHit;  // trampolines
 void* g_cheatCombatHurt;
+void* g_cheatOptionsRefresh;
+void* g_cheatOptionsClick;
+
+void __cdecl CheatOptionsRefresh()
+{
+    ((void(__cdecl*)())g_cheatOptionsRefresh)();
+    ShowRows();
+}
+
+// True if the clicked element is one of our buttons (then handled here).
+int __cdecl CheatOptionsClick(const BYTE* element)
+{
+    if (!Readable(element, 0x24)) return 0;
+    const char* name = (const char*)element + 4;
+    for (const Row& r : kRows) {
+        bool on = strcmp(name, r.on) == 0;
+        if (!on && strcmp(name, r.off) != 0) continue;
+        MenuSound(1);
+        if (*r.flag != on) Set(*r.flag, on, r.key, r.name);
+        ElementSelected(r.on, on);
+        ElementSelected(r.off, !on);
+        return 1;
+    }
+    return 0;
+}
 
 void __cdecl CheatCombatHurt(void* enemy)
 {
@@ -192,6 +312,25 @@ extern "C" __declspec(naked) void CheatEnemyHitHook()
     }
 }
 
+extern "C" __declspec(naked) void CheatOptionsClickHook()
+{
+    __asm {
+        push ecx
+        push edx
+        push dword ptr [esp + 12]  // element
+        call CheatOptionsClick
+        add esp, 4
+        pop edx
+        pop ecx
+        test eax, eax
+        jz original
+        mov al, 1
+        ret 4
+    original:
+        jmp dword ptr [g_cheatOptionsClick]
+    }
+}
+
 extern "C" __declspec(naked) void CheatCombatHurtHook()
 {
     __asm {
@@ -214,6 +353,15 @@ void Cheats_Install(const char* iniPath)
     g_oneHitKills = GetPrivateProfileIntA("cheats", "one_hit_kills", 0, g_ini) != 0;
     g_cheatEnemyHit = Detour(kEnemyHit, kEnemyHitPrologue, sizeof(kEnemyHitPrologue), (void*)CheatEnemyHitHook);
     g_cheatCombatHurt = Detour(kCombatHurt, kCombatHurtPrologue, sizeof(kCombatHurtPrologue), (void*)CheatCombatHurtHook);
+    if (memcmp((void*)kOptionsClick, kOptionsClickPrologue, sizeof(kOptionsClickPrologue)) == 0) {
+        g_cheatOptionsRefresh = Detour(kOptionsRefresh, kOptionsRefreshPrologue, sizeof(kOptionsRefreshPrologue),
+                                       (void*)CheatOptionsRefresh);
+        if (g_cheatOptionsRefresh)
+            g_cheatOptionsClick = Detour(kOptionsClick, kOptionsClickPrologue, sizeof(kOptionsClickPrologue),
+                                         (void*)CheatOptionsClickHook);
+    }
+    g_menu = g_cheatOptionsRefresh && g_cheatOptionsClick;
+    Log("cheats: game options rows %s", g_menu ? "installed" : "not installed (unknown executable)");
     Log("cheats: installed (invulnerable %d, infinite sand %d, one-hit kills %d%s; Ctrl+F1 / F2 / F3)",
         g_invulnerable, g_infiniteSand, g_oneHitKills,
         g_cheatEnemyHit && g_cheatCombatHurt ? "" : " - not available, unknown executable");
@@ -221,6 +369,7 @@ void Cheats_Install(const char* iniPath)
 
 void Cheats_OnPresent(bool keys)
 {
+    if (g_menu) StretchPanel();
     Keys k = ReadKeys(keys);
     if (k.ctrl && k.f1) Toggle(g_invulnerable, "invulnerable", "invulnerable");
     if (k.ctrl && k.f2) Toggle(g_infiniteSand, "infinite_sand", "infinite sand");

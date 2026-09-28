@@ -9,7 +9,9 @@
 //   0x661790  coloured quad (x, y, width / screen width, height / screen height, colour, flags)
 // We move their corners towards the screen centre: x by 4:3 / screen aspect
 // (and [ui] scale), y by [ui] scale. Quads covering the whole width (fades,
-// letterbox bars, full-screen overlays) are left alone.
+// letterbox bars, full-screen overlays) are left alone. Before that, one quad
+// can be given other rows (Ui_MoveQuadRows, for a panel behind added menu
+// rows whose layout the game sets again every frame).
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
@@ -29,6 +31,25 @@ const int* const g_screenHeight = (const int*)0x00ae1618;
 
 bool g_aspect = true;
 float g_scale = 1.0f;
+
+// Ui_MoveQuadRows: quads from line y0 to y1 (virtual 480 lines) are drawn
+// from line to0 to to1 instead.
+struct {
+    bool on;
+    float y0, y1, to0, to1;
+} g_move;
+
+// Moves the top and bottom edge (screen pixels) of a matching quad.
+void Move(float& y0, float& y1)
+{
+    if (!g_move.on) return;
+    float k = *g_screenHeight / 480.0f;
+    if (y0 > g_move.y0 * k - 2.0f && y0 < g_move.y0 * k + 2.0f && y1 > g_move.y1 * k - 2.0f &&
+        y1 < g_move.y1 * k + 2.0f) {
+        y0 = g_move.to0 * k;
+        y1 = g_move.to1 * k;
+    }
+}
 
 }  // namespace
 
@@ -58,6 +79,7 @@ bool Factors(float* kx, float* ky, float* cx, float* cy, float* w)
 
 extern "C" void __cdecl UiTexturedQuad(float* a)  // a[0..3] = x0, y0, x1, y1
 {
+    Move(a[1], a[3]);
     float kx, ky, cx, cy, w;
     if (!Factors(&kx, &ky, &cx, &cy, &w)) return;
     if (a[0] <= 1.0f && a[2] >= w - 1.0f) return;  // full width
@@ -69,6 +91,11 @@ extern "C" void __cdecl UiTexturedQuad(float* a)  // a[0..3] = x0, y0, x1, y1
 
 extern "C" void __cdecl UiColouredQuad(float* a)  // a[0..3] = x, y, width / screen width, height / screen height
 {
+    if (g_move.on && *g_screenHeight > 0) {
+        float h = (float)*g_screenHeight, y1 = a[1] + a[3] * h;
+        Move(a[1], y1);
+        a[3] = (y1 - a[1]) / h;
+    }
     float kx, ky, cx, cy, w;
     if (!Factors(&kx, &ky, &cx, &cy, &w)) return;
     if (a[0] <= 1.0f && a[0] + a[2] * w >= w - 1.0f) return;  // full width
@@ -130,9 +157,14 @@ void Ui_Install(bool aspect, float scale)
     done = true;
     g_aspect = aspect;
     g_scale = scale < 0.25f ? 0.25f : scale > 2.0f ? 2.0f : scale;
-    if (!g_aspect && g_scale == 1.0f) return;
+    // Installed also without scaling, for Ui_MoveQuadRows.
     g_uiTexturedQuad = Detour(kTexturedQuad, kTexturedQuadPrologue, sizeof(kTexturedQuadPrologue), (void*)UiTexturedQuadHook);
     g_uiColouredQuad = Detour(kColouredQuad, kColouredQuadPrologue, sizeof(kColouredQuadPrologue), (void*)UiColouredQuadHook);
     Log("ui: 2D elements %s, scale %.2f (%s)", g_aspect ? "in 4:3 proportions" : "stretched", g_scale,
         g_uiTexturedQuad && g_uiColouredQuad ? "installed" : "unknown executable, not installed");
+}
+
+void Ui_MoveQuadRows(bool on, float y0, float y1, float to0, float to1)
+{
+    g_move = { on, y0, y1, to0, to1 };
 }

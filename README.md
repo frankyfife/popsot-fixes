@@ -155,6 +155,21 @@ which is hidden in the PC release: it lists every level of the game and loads it
 directly. It sits in the menu column above Quit, like "Special" in the console menus,
 and all entries of the main menu use its (smaller) text size.
 
+### Cheats
+The PC release hides four unused rows in the game options, left over from a cheat
+mode. The August 2003 PS2 prototype still has that mode: health up and down, weapon
+cycling, and a switch that stops enemy spawners, all in the game's scripts. On PC only
+the spawners' check of the switch is left. The fix rebuilds three cheats on the PC
+version's own data and shows them in those rows (**Options → Game Options**, also
+from the pause menu), with On / Off like the other options:
+
+* **Invulnerable**: the prince's life stays at its maximum.
+* **Infinite sand**: the sand tanks stay full.
+* **One-hit kills**: every hit on an enemy uses the game's own instant kill.
+
+In the game, Ctrl+F1 / Ctrl+F2 / Ctrl+F3 switch them as well (one buzz = on, two = off).
+The state is kept in `[cheats]` of `popfix.ini`.
+
 ### Xbox menus *(experimental, off by default)*
 The console front end (3D scene, fading text, controller hints) is still inside the PC
 executable. `[menus] console=1` switches it back on. Saving and loading from those
@@ -185,6 +200,9 @@ file is the default.
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |
 | `[debug] verbose` | `0` | 1 = detailed diagnostics in `popfix.log` |
+| `[cheats] invulnerable` | `0` | the prince's life stays at its maximum |
+| `[cheats] infinite_sand` | `0` | the sand tanks stay full |
+| `[cheats] one_hit_kills` | `0` | every hit on an enemy kills it |
 
 ## Requirements
 
@@ -219,8 +237,9 @@ Requires the Visual Studio 2022 Build Tools (C++ x86). Run `build.bat`; the resu
 
 See [docs/TECHNICAL.md](docs/TECHNICAL.md) for the reverse-engineering notes:
 how the water and post effects are rendered on Xbox and PC, where the differences are,
-how the menu system handles input, where the vibration went, and how the button hints,
-cameras, videos and sound are hooked.
+how the menu system handles input, where the vibration went, how the button hints,
+cameras, videos and sound are hooked, and how the cheats were traced back from the PS2
+prototype.
 
 ## Credits
 

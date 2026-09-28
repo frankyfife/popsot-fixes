@@ -470,3 +470,52 @@ class factory (`DllGetClassObject`), uninitialized like the COM path. DSOAL emul
 EAX on OpenAL Soft and outputs to the Windows speaker setup. With `[sound] eax=1` the
 setters `0x414020` (3D audio) and `0x414070` (EAX) are called on the configuration
 once `0x413ff0` reports EAX as available.
+
+## Cheats
+
+**Where they come from.** The PS2 prototype of 19 August 2003 (`SLUS_207.43`) ships a
+linker map (`MAPFILE.MAP`) with every symbol, among them the game's Jade AI scripts
+compiled to C (`Mdl<model>_fn_<name>`). Its cheat mode is part of those scripts:
+`Mdl0000186A_fn_Cheat_Set` / `Cheat_Test` set and test bits in a variable of the global
+script object, `Global_Bhv_MainLoop` switches them with a pad combination, the spawner
+`Spawn_WP__MSG` ignores spawn requests while they are set, and the prince's
+`Mdl000092EB_fn_iCheats` (called every frame from `Prince_Bhv_BeforeMainTrack`) gives
+life up / down and weapon cycling on pad buttons. The PC release keeps only the test
+(`0x5b11b0`, global object `0x4e000254`, bits at variable `+0x210`, used by two
+spawners with masks 3 and 8); nothing sets the bits, and the game options page hides
+the rows that once switched them (see below). Script references (such as `0xcc00008e`)
+are the same in both builds, which is how the PC counterparts of the prototype's
+functions were found.
+
+**Script objects.** Object `+0x18` → extended data, `+4` → AI instance, `+0x44` → the
+instance's variables. The main actors (script references 1 and 2) are at `0xa99474`
+(the prince) and `0xa99478`.
+
+| Cheat | PC data (prince / enemy variables) | Found in |
+|---|---|---|
+| Invulnerable | life `+0x19c`, maximum `+0x11f8` (ints; prototype `+0x17c` / `+0xb48`) | PC `fn_RegenerateLife` (`0x4e8772`) |
+| Infinite sand | filled tanks `+0x7ac`, tanks `+0xd24` (up to 10), current tank `+0xca8`, full tank `+0x122c` | sand cloud pickup (`0x5f24ff`), memory dumps while rewinding |
+| One-hit kills | combat model `0x2077`: hurt state `+0x398`, damage (float) `+0x208`, life `+0x554` | PC `fn_Combat_ProcessCurrentHurt` (`0x5ff670`) |
+
+Invulnerability and sand are kept at their maximum once per frame. For one-hit kills,
+`0x5ff670` (cdecl, the object) is hooked: in hurt state 4 it subtracts the damage from
+the life, and a damage of exactly 1000.0 is the game's own instant kill, which the
+hook sets for every hit on an object that is not a main actor (so Farah is never
+killed by a hit). A few sand creatures (model `0x7493`) take melee hits in `0x602a60`
+instead (cdecl: object, message); their life is a hit counter at `+0x7c`, and a hit
+sent by the prince (message `+0`) clears it first.
+
+**Menu.** The game options page (`P_GameOptions`) still has four rows with On / Off
+buttons: labels `SetupMenu`, `Cheats`, `Interface`, `WorkInProgress`, buttons
+`<name>On` / `<name>Off`. When the page is shown (`0x4048b0`) the labels get the caption
+`" "` and the buttons are hidden; then `0x404510` refreshes the page (frequency slider,
+tutorials On / Off). After that refresh the fix captions the first three labels and
+shows and marks their buttons with the page's own helpers (cdecl, by element name,
+looked up on the current page via `0x712440` / `0x712240`): `0x403850` caption (a wide
+string), `0x4032e0` visible (element `+0x24`), `0x403280` selected (element vtable
+`+0x1c`). Clicks go to `0x404690` (argument: the element, name at `+4`); ours are
+handled there with the page's click sound (`0x402ab0`). The dark panel behind the rows
+(`BlackRectangle`, lines 130 to 286 of the virtual 640×480 layout) is set again from the
+layout every frame before drawing, so `ui.cpp` moves the drawn quad itself to lines 109
+to 419 while the page is shown (its texture has frayed, transparent margins: about
+13.5 % of the height at the top and 8.5 % at the bottom).
