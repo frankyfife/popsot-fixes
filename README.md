@@ -159,16 +159,23 @@ and all entries of the main menu use its (smaller) text size.
 The PC release hides four unused rows in the game options, left over from a cheat
 mode. The August 2003 PS2 prototype still has that mode: health up and down, weapon
 cycling, and a switch that stops enemy spawners, all in the game's scripts. On PC only
-the spawners' check of the switch is left. The fix rebuilds three cheats on the PC
+the spawners' check of the switch is left. The fix rebuilds the cheats on the PC
 version's own data and shows them in those rows (**Options → Game Options**, also
-from the pause menu), with On / Off like the other options:
+from the pause menu):
 
-* **Invulnerable**: the prince's life stays at its maximum.
-* **Infinite sand**: the sand tanks stay full.
-* **One-hit kills**: every hit on an enemy uses the game's own instant kill.
+* **Invulnerable** (On / Off): the prince's life stays at its maximum.
+* **Infinite sand** (On / Off): the sand tanks stay full.
+* **One-hit kills** (On / Off): every hit on an enemy uses the game's own instant kill.
+* **Sword n/4** with a **Change** button (only while a level is loaded): gives the
+  prince the next of the game's four swords, also ones not found yet, with the game's
+  own sword change (fighting moves included).
 
-In the game, Ctrl+F1 / Ctrl+F2 / Ctrl+F3 switch them as well (one buzz = on, two = off).
-The state is kept in `[cheats]` of `popfix.ini`.
+In the game, Ctrl+F1 / Ctrl+F2 / Ctrl+F3 switch the first three as well (one buzz = on,
+two = off), Ctrl+F4 changes the sword. The state is kept in `[cheats]` of `popfix.ini`.
+
+Languages: the new captions are in German when Windows' display language is German,
+and in English for every other language. The On / Off buttons are the game's own and
+follow the game's language.
 
 ### Xbox menus *(experimental, off by default)*
 The console front end (3D scene, fading text, controller hints) is still inside the PC

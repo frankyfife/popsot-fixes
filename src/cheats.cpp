@@ -39,8 +39,17 @@
 // 0x404690 (argument: the element, its name at +4); ours are handled there
 // with the page's click sound (0x402ab0).
 //
+// Swords: the prince's weapon list (count +0x8b4, objects from +0x8b8) holds
+// the four swords of the game and two daggers; the sword index is +0x73c. The
+// PC version of fn_SetWeapon (0x4f2df0, cdecl (prince, sword, index 0..3))
+// hides the old sword, shows and attaches the new one and selects the
+// matching fighting actions; "next sword" calls it with the next of the four
+// (also swords not found yet). The menu's fourth row (WorkInProgress) shows
+// "Sword n/4" with a Change button while a level is loaded (not the front
+// end's world, where the prince pointer is stale).
+//
 // Keys (in the game window): Ctrl+F1 invulnerable, Ctrl+F2 infinite sand,
-// Ctrl+F3 one-hit kills, Ctrl+F5 dumps the prince's variables to
+// Ctrl+F3 one-hit kills, Ctrl+F4 next sword, Ctrl+F5 dumps the prince's variables to
 // popfix_dump_<n>.bin (for finding further values). One buzz = on, two = off.
 // [cheats] in popfix.ini keeps the state.
 
@@ -51,6 +60,7 @@
 #include "cheats.h"
 #include "gamepad.h"
 #include "ui.h"
+#include "menucam.h"
 
 void Log(const char* fmt, ...);
 
@@ -68,6 +78,12 @@ const DWORD kEnemyHit = 0x00602a60;
 // sub esp, 0x124; mov eax, [0xabc930]
 const unsigned char kEnemyHitPrologue[] = { 0x81, 0xEC, 0x24, 0x01, 0x00, 0x00, 0xA1, 0x30, 0xC9, 0xAB, 0x00 };
 const DWORD kEnemyHits = 0x7c;
+// Swords: PC fn_SetWeapon (cdecl: prince, sword, index 0..3), the sword index,
+// and the prince's weapon list (count, then the four swords and two daggers).
+typedef void(__cdecl* SetWeapon_t)(void* prince, void* sword, int index);
+const SetWeapon_t SetWeapon = (SetWeapon_t)0x004f2df0;
+const unsigned char kSetWeaponPrologue[] = { 0x83, 0xEC, 0x10, 0xA1, 0x34, 0xC9, 0xAB, 0x00 };
+const DWORD kSwordIndex = 0x73c, kWeaponCount = 0x8b4, kWeapons = 0x8b8;
 
 const DWORD kOptionsRefresh = 0x00404510;
 // push -1; push 0x7a0e90; mov eax, fs:[0]
@@ -115,20 +131,20 @@ BYTE* PrinceVars()
 }
 
 struct Keys {
-    bool ctrl, f1, f2, f3, f5;
+    bool ctrl, f1, f2, f3, f4, f5;
 };
 
 Keys ReadKeys(bool keys)
 {
-    static bool down[4];
-    const int vk[4] = { VK_F1, VK_F2, VK_F3, VK_F5 };
-    bool p[4];
-    for (int i = 0; i < 4; i++) {
+    static bool down[5];
+    const int vk[5] = { VK_F1, VK_F2, VK_F3, VK_F4, VK_F5 };
+    bool p[5];
+    for (int i = 0; i < 5; i++) {
         bool now = keys && GetAsyncKeyState(vk[i]) < 0;
         p[i] = now && !down[i];
         down[i] = now;
     }
-    return { keys && GetAsyncKeyState(VK_CONTROL) < 0, p[0], p[1], p[2], p[3] };
+    return { keys && GetAsyncKeyState(VK_CONTROL) < 0, p[0], p[1], p[2], p[3], p[4] };
 }
 
 void Set(bool& flag, bool on, const char* key, const char* name)
@@ -163,7 +179,30 @@ const Row kRows[] = {
     { "Interface", "InterfaceOn", "InterfaceOff", &g_oneHitKills, "one_hit_kills", "one-hit kills",
       L"Ein Treffer reicht", L"One-hit kills" },
 };
-bool g_menu;  // menu hooks installed
+bool g_menu;       // menu hooks installed
+bool g_swords;     // fn_SetWeapon found
+bool g_swordRow;   // the sword row is shown (a level is loaded)
+
+// The prince's variables while a level (not the front end's world) is loaded.
+BYTE* LevelPrinceVars()
+{
+    return MenuCam_InMenuWorld() ? nullptr : PrinceVars();
+}
+
+// Gives the prince his next sword (of the four in his weapon list) with the
+// game's own fn_SetWeapon, as the prototype's cheat did.
+bool NextSword()
+{
+    BYTE* p = LevelPrinceVars();
+    if (!g_swords || !p || *(int*)(p + kWeaponCount) < 4) return false;
+    int index = *(int*)(p + kSwordIndex);
+    index = index >= 0 && index < 3 ? index + 1 : 0;
+    void* sword = *(void**)(p + kWeapons + index * 4);
+    if (!Readable(sword, 0x20)) return false;
+    SetWeapon(*g_mainActor1, sword, index);
+    Log("cheats: sword %d", index + 1);
+    return true;
+}
 
 // An element of the current menu page (0x712440 on the menu manager gives the
 // page, 0x712240 searches its elements by name, as the page's helpers do).
@@ -191,14 +230,59 @@ BYTE* Element(const char* name)
 // 13.5 % of the height at the top, 8.5 % at the bottom): lines 109 to 419 keep
 // the visible top at line 151 as before and end 25 lines below our last row
 // (368), like below the tutorials row.
+// With the sword row (ending at 398) the same margins give lines 106 to 442.
 void StretchPanel()
 {
-    Ui_MoveQuadRows(Element("SetupMenuOn") != nullptr, 130, 286, 109, 419);
+    bool page = Element("SetupMenuOn") != nullptr;
+    if (g_swordRow) Ui_MoveQuadRows(page, 130, 286, 106, 442);
+    else Ui_MoveQuadRows(page, 130, 286, 109, 419);
+}
+
+// Sets the caption of a button: its wide string sits at +0x34 of the
+// element's text object (a label's at +0xc, where 0x403850 writes); assigned
+// with the same string method (0x403750, thiscall (text, length)).
+void ButtonCaption(const char* name, const wchar_t* text)
+{
+    BYTE* el = Element(name);
+    BYTE* sub = el && Readable(el, 0x30) ? *(BYTE**)(el + 0x2c) : nullptr;
+    if (!Readable(sub, 0x50)) return;
+    BYTE* caption = sub + 0x34;
+    DWORD size = *(DWORD*)(caption + 0x14), cap = *(DWORD*)(caption + 0x18);
+    if (size > cap || cap < 7 || cap > 0x1000) return;  // not a string: leave it
+    size_t len = wcslen(text);
+    __asm {
+        push len
+        push text
+        mov ecx, caption
+        mov eax, 0x00403750
+        call eax
+    }
+}
+
+bool German()
+{
+    return PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN;
+}
+
+// The fourth row: "Sword n/4" with a Change button, while a level is loaded.
+void ShowSwordRow()
+{
+    BYTE* p = LevelPrinceVars();
+    g_swordRow = g_swords && p && *(int*)(p + kWeaponCount) >= 4;
+    if (!g_swordRow) return;
+    int index = *(int*)(p + kSwordIndex);
+    wchar_t label[32];
+    _snwprintf(label, 32, German() ? L"Schwert %d/4" : L"Sword %d/4", index >= 0 && index < 4 ? index + 1 : 1);
+    label[31] = 0;
+    ElementCaption("WorkInProgress", label);
+    ButtonCaption("WorkInProgressOn", German() ? L"Wechseln" : L"Change");
+    ElementVisible("WorkInProgressOn", 1);
+    ElementSelected("WorkInProgressOn", 0);
 }
 
 void ShowRows()
 {
-    bool german = PRIMARYLANGID(GetUserDefaultUILanguage()) == LANG_GERMAN;
+    bool german = German();
     for (const Row& r : kRows) {
         ElementCaption(r.label, german ? r.german : r.english);
         ElementVisible(r.on, 1);
@@ -206,6 +290,7 @@ void ShowRows()
         ElementSelected(r.on, *r.flag);
         ElementSelected(r.off, !*r.flag);
     }
+    ShowSwordRow();
 }
 
 void Dump()
@@ -264,6 +349,12 @@ int __cdecl CheatOptionsClick(const BYTE* element)
 {
     if (!Readable(element, 0x24)) return 0;
     const char* name = (const char*)element + 4;
+    if (strcmp(name, "WorkInProgressOn") == 0 && g_swordRow) {
+        MenuSound(1);
+        NextSword();
+        ShowSwordRow();
+        return 1;
+    }
     for (const Row& r : kRows) {
         bool on = strcmp(name, r.on) == 0;
         if (!on && strcmp(name, r.off) != 0) continue;
@@ -361,6 +452,7 @@ void Cheats_Install(const char* iniPath)
                                          (void*)CheatOptionsClickHook);
     }
     g_menu = g_cheatOptionsRefresh && g_cheatOptionsClick;
+    g_swords = memcmp((void*)SetWeapon, kSetWeaponPrologue, sizeof(kSetWeaponPrologue)) == 0;
     Log("cheats: game options rows %s", g_menu ? "installed" : "not installed (unknown executable)");
     Log("cheats: installed (invulnerable %d, infinite sand %d, one-hit kills %d%s; Ctrl+F1 / F2 / F3)",
         g_invulnerable, g_infiniteSand, g_oneHitKills,
@@ -374,6 +466,7 @@ void Cheats_OnPresent(bool keys)
     if (k.ctrl && k.f1) Toggle(g_invulnerable, "invulnerable", "invulnerable");
     if (k.ctrl && k.f2) Toggle(g_infiniteSand, "infinite_sand", "infinite sand");
     if (k.ctrl && k.f3 && g_cheatEnemyHit && g_cheatCombatHurt) Toggle(g_oneHitKills, "one_hit_kills", "one-hit kills");
+    if (k.ctrl && k.f4 && NextSword()) Gamepad_Pulse(1);
     if (k.ctrl && k.f5) Dump();
 
     if (BYTE* p = PrinceVars()) {

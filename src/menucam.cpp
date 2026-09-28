@@ -69,6 +69,7 @@ float g_up = 0.0f;    // [menus] camera_up
 float g_side = 0.0f;  // [menus] camera_side (positive = right)
 bool g_installed;
 bool g_menuLoaded;  // menu3D has been loaded
+bool g_inMenuWorld;  // the last world loaded is menu3D
 BYTE* g_cam;  // camera we moved last
 bool g_haveOut;
 float g_base[3], g_out[3];
@@ -268,6 +269,7 @@ BYTE* __cdecl ParseWorldHook(void* data)
             bool menu = _stricmp(name, kMenuWorld) == 0;
             if (menu && !g_menuLoaded) Log("menu camera: main menu world \"%s\" loaded", name);
             if (menu) g_menuLoaded = true;
+            g_inMenuWorld = menu;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
     }
@@ -605,4 +607,9 @@ void MenuCam_OnPresent(bool keys)
     else if (GetAsyncKeyState(VK_CONTROL) < 0) g_side += dir * 0.25f;
     else g_forward -= dir * 0.5f;
     Log("menu camera: camera_forward %.2f camera_up %.2f camera_side %.2f", g_forward, g_up, g_side);
+}
+
+bool MenuCam_InMenuWorld()
+{
+    return g_inMenuWorld;
 }

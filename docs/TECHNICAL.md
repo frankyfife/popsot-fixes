@@ -496,6 +496,7 @@ instance's variables. The main actors (script references 1 and 2) are at `0xa994
 | Invulnerable | life `+0x19c`, maximum `+0x11f8` (ints; prototype `+0x17c` / `+0xb48`) | PC `fn_RegenerateLife` (`0x4e8772`) |
 | Infinite sand | filled tanks `+0x7ac`, tanks `+0xd24` (up to 10), current tank `+0xca8`, full tank `+0x122c` | sand cloud pickup (`0x5f24ff`), memory dumps while rewinding |
 | One-hit kills | combat model `0x2077`: hurt state `+0x398`, damage (float) `+0x208`, life `+0x554` | PC `fn_Combat_ProcessCurrentHurt` (`0x5ff670`) |
+| Next sword | weapon list: count `+0x8b4`, objects from `+0x8b8` (four swords, two daggers); sword index `+0x73c`, current sword `+0x11b8` | PC `fn_SetWeapon` (`0x4f2df0`), memory reads of the weapon list |
 
 Invulnerability and sand are kept at their maximum once per frame. For one-hit kills,
 `0x5ff670` (cdecl, the object) is hooked: in hurt state 4 it subtracts the damage from
@@ -504,6 +505,15 @@ hook sets for every hit on an object that is not a main actor (so Farah is never
 killed by a hit). A few sand creatures (model `0x7493`) take melee hits in `0x602a60`
 instead (cdecl: object, message); their life is a hit counter at `+0x7c`, and a hit
 sent by the prince (message `+0`) clears it first.
+
+The sword change calls the PC version of `Mdl000092EB_fn_SetWeapon` (`0x4f2df0`, cdecl:
+prince, sword, index 0..3) with the next of the four swords, as the prototype's cheat
+did step by step: it deactivates and hides the old sword (`0x6387b0`, `0x476d30` /
+`0x476e30`), stores the new one (`+0x11b8`, `+0xc88`, `+0x1204`) and its index, shows it,
+attaches it (`fn_SnapSword`, `0x4f2580`) and selects the matching fighting actions
+(`0x47f180`). It is only offered while a level is loaded: in the front end (world
+`menu3D`, seen by `menucam.cpp` when worlds are parsed) the main actor pointer is left
+over from the last game.
 
 **Menu.** The game options page (`P_GameOptions`) still has four rows with On / Off
 buttons: labels `SetupMenu`, `Cheats`, `Interface`, `WorkInProgress`, buttons
@@ -514,8 +524,13 @@ shows and marks their buttons with the page's own helpers (cdecl, by element nam
 looked up on the current page via `0x712440` / `0x712240`): `0x403850` caption (a wide
 string), `0x4032e0` visible (element `+0x24`), `0x403280` selected (element vtable
 `+0x1c`). Clicks go to `0x404690` (argument: the element, name at `+4`); ours are
-handled there with the page's click sound (`0x402ab0`). The dark panel behind the rows
+handled there with the page's click sound (`0x402ab0`). The fourth row shows "Sword n/4"; its On button
+gets the caption "Change" and its Off button stays hidden. A button's caption is a wide
+string at `+0x34` of its text object (a label's is at `+0xc`, where `0x403850` writes),
+assigned with the same string method (`0x403750`, thiscall: text, length). The captions
+are German when Windows' display language is German and English otherwise; On / Off
+are the game's own strings. The dark panel behind the rows
 (`BlackRectangle`, lines 130 to 286 of the virtual 640×480 layout) is set again from the
 layout every frame before drawing, so `ui.cpp` moves the drawn quad itself to lines 109
-to 419 while the page is shown (its texture has frayed, transparent margins: about
+to 419 (106 to 442 with the sword row, which ends at line 398) while the page is shown (its texture has frayed, transparent margins: about
 13.5 % of the height at the top and 8.5 % at the bottom).
