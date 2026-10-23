@@ -35,6 +35,7 @@
 #include "cheats.h"
 
 // ---------------------------------------------------------------- logging
+extern bool g_xboxLayout;
 static FILE* g_log;
 static HWND g_gameWindow;  // focus window of the game device
 static int g_devicesHooked;
@@ -1223,6 +1224,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             g_texPackBrightness = (float)atof(v);
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
+			g_xboxLayout = GetPrivateProfileIntA("controller", "xbox_layout", 0, g_iniPath) != 0;
         }
         if (slash) {
             slash[1] = 0;

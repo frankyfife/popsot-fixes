@@ -32,6 +32,7 @@
 #include "gamepad.h"
 
 void Log(const char* fmt, ...);
+bool g_xboxLayout = false;
 
 namespace {
 
@@ -100,10 +101,10 @@ float PadValue(unsigned action)
     // The original Xbox pad had no shoulder buttons. The PS2 layout of the same
     // game (L1 rewind, R1 special action, L2 alternate view, R2 look) maps better
     // onto a modern pad, so shoulders and triggers follow it:
-    case 4: return Trigger(g_pad.bLeftTrigger);            // Black: alternate view (text code \p5\l)
-    case 5: return Trigger(g_pad.bRightTrigger);           // White: look (text code \p5\r)
-    case 6: return Button(XINPUT_GAMEPAD_LEFT_SHOULDER);   // L trigger: rewind (PS2 L1)
-    case 7: return Button(XINPUT_GAMEPAD_RIGHT_SHOULDER);  // R trigger: special action (PS2 R1)
+    case 4: return g_xboxLayout ? Button(XINPUT_GAMEPAD_LEFT_SHOULDER) : Trigger(g_pad.bLeftTrigger);		// Black: alternate view (text code \p5\l)
+	case 5: return g_xboxLayout ? Button(XINPUT_GAMEPAD_RIGHT_SHOULDER) : Trigger(g_pad.bRightTrigger);		// White: look (text code \p5\r)
+	case 6: return g_xboxLayout ? Trigger(g_pad.bLeftTrigger) : Button(XINPUT_GAMEPAD_LEFT_SHOULDER);		// L trigger: rewind (PS2 L1)
+	case 7: return g_xboxLayout ? Trigger(g_pad.bRightTrigger) : Button(XINPUT_GAMEPAD_RIGHT_SHOULDER);		// R trigger: special action (PS2 R1)
     case 9: return Button(XINPUT_GAMEPAD_START);
     case 10: return Button(XINPUT_GAMEPAD_RIGHT_THUMB);
     case 11: return Button(XINPUT_GAMEPAD_LEFT_THUMB);
@@ -183,10 +184,10 @@ const char* PadPrompt(char code)
     case 'B': return "B";
     case 'C': return "X";
     case 'D': return "Y";
-    case 'L': return "LB";
-    case 'R': return "RB";
-    case 'l': return "LT";
-    case 'r': return "RT";
+    case 'L': return g_xboxLayout ? "LT" : "LB";
+    case 'R': return g_xboxLayout ? "RT" : "RB";
+    case 'l': return g_xboxLayout ? "LB" : "LT";
+    case 'r': return g_xboxLayout ? "RB" : "RT";
     case 'M': return "LS";
     }
     return nullptr;
