@@ -706,7 +706,10 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     static bool f8Down, f10Down;
     bool keys = !g_gameWindow || GetForegroundWindow() == g_gameWindow;
     if (KeyPressed(VK_F10, f10Down, keys)) {
-        if (GetAsyncKeyState(VK_CONTROL) < 0) {
+        if (GetAsyncKeyState(VK_SHIFT) < 0) {
+            // Shift+F10: wave simulation at the Xbox rate / once per frame.
+            Water_Toggle();
+        } else if (GetAsyncKeyState(VK_CONTROL) < 0) {
             // Ctrl+F10: the full-screen blur effect on / off, for comparison.
             unsigned char* fn = (unsigned char*)0x00670710;
             if (g_blurEffectOriginal) {
@@ -741,7 +744,6 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     MenuPad_OnPresent();
     MenuCam_OnPresent(keys);
     Cheats_OnPresent(keys);
-    Water_OnPresent(keys);
     Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
     if (g_verbose) Trace_ProbeMenuManager();
