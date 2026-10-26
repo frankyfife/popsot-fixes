@@ -944,7 +944,10 @@ static char g_gameDir[MAX_PATH];
 static char g_texPack[MAX_PATH] = "poptex_d3d9.dll";  // [textures] pack / bloom, see texpack.cpp
 static bool g_texPackBloom = true;
 static float g_texPackBrightness = 1.25f;
-static char g_texPackSkip[512] = "0B0041BB";  // with trailing backslash
+static char g_texPackSkip[512] = "0B0041BB";
+// [textures] only: the HUD (world GameInterface: health bar, frame, sand tanks, ring)
+static const char kTexPackHud[] = "0B007B00-0B007BFF,0B008389,0B008C14,0B008C15";
+static char g_texPackOnly[512];  // with trailing backslash
 static bool g_loggedRefract;
 char g_iniPath[MAX_PATH];
 
@@ -1226,6 +1229,9 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("textures", "pack", "poptex_d3d9.dll", g_texPack, sizeof(g_texPack), g_iniPath);
             g_texPackBloom = GetPrivateProfileIntA("textures", "bloom", 1, g_iniPath) != 0;
             GetPrivateProfileStringA("textures", "skip", "0B0041BB", g_texPackSkip, sizeof(g_texPackSkip), g_iniPath);
+            GetPrivateProfileStringA("textures", "only", "hud", g_texPackOnly, sizeof(g_texPackOnly), g_iniPath);
+            if (_stricmp(g_texPackOnly, "hud") == 0) strcpy(g_texPackOnly, kTexPackHud);
+            else if (_stricmp(g_texPackOnly, "all") == 0) g_texPackOnly[0] = 0;
             GetPrivateProfileStringA("textures", "brightness", "1.25", v, sizeof(v), g_iniPath);
             g_texPackBrightness = (float)atof(v);
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
@@ -1237,7 +1243,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             Sound_SetForceEax(GetPrivateProfileIntA("sound", "eax", 1, g_iniPath) != 0);
             Sound_Install(g_gameDir);
             Video_Install(GetPrivateProfileIntA("video", "keep_aspect", 1, g_iniPath) != 0);
-            TexPack_Load(g_gameDir, g_texPack, g_texPackBloom, g_texPackSkip, g_texPackBrightness);
+            TexPack_Load(g_gameDir, g_texPack, g_texPackBloom, g_texPackSkip, g_texPackOnly, g_texPackBrightness);
             Cheats_Install(g_iniPath);
             strcpy(slash + 1, "dx_gog.dll");
         }

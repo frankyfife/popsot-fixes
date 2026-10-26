@@ -465,6 +465,22 @@ inverts the two hashes of skipped keys, so uploads never match them. The HD
 pack's font atlas `0B0041BB` (512×128) is replaced by a 256×64 image and is
 skipped by default.
 
+`[textures] only` (default `hud`) works the same way the other way round: every
+record whose key is not listed is skipped. The HUD is the game's `GameInterface`
+world (`prince.bf` key `FF0E027E`, a LZO1X-compressed `.bin`): it references 26
+of the pack's textures, the group `0B007B58`–`0B007B73` plus `0B008389`,
+`0B008C14`, `0B008C15`, and the font `0B0041BB` (also in `MenuBoot`,
+`MenuCredits`, `MenuInGame` and `menu3D`). The only other `0B` texture of the pack,
+`0B0044F9` (1024×256), belongs to `menu3D`. The rePOP_ff Xbox port takes the same
+group `0B007Bxx` from this pack for its HD HUD (`tools/hd-ui.py`). With a list
+set, the fix also turns off the BF overlays: it saves the executable's import
+table before loading the pack and sets back every entry that then points into the
+pack (`CreateFileA`/`CreateFileW`/`ReadFile`/`CloseHandle`), after the pack's
+`DllMain` and again after its `Direct3DCreate9`. The overlaid ranges lie in
+`menu3D` (8 blocks of 256 KB), `1102_MgcFntRm`, `2501_TowerInsideB`,
+`3501_HaremA`, `7301_EastLink`, `6101_SalleC`, `ACT_SandMan_02` and
+`FX_TrapEffects` (offsets from `poptex_d3d9.log`, mapped to the BF's file table).
+
 The payloads are stored uncompressed (all mip levels, format byte at record
 `+0xf`: 1 DXT1, 2 DXT5, 3 A8R8G8B8; replacement size at `+0xa`). 32 of the HD
 pack's replacements are empty: every block black (`3100668A`, `310423D3`…,

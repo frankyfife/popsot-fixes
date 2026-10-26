@@ -132,6 +132,10 @@ Installation:
    writes its own messages to `poptex_d3d9.log`.
 
 Notes:
+* By default only the pack's HUD is used: health bar, its frame, sand tanks and ring
+  (the 26 textures of the game's `GameInterface` world, keys `0B007Bxx`, `0B008389`,
+  `0B008C14`, `0B008C15`). The rest of the pack does not fit the game's look; it and
+  the pack's changes to `prince.bf` stay off. `[textures] only=all` uses the whole pack.
 * The pack's font replacement is only half the original resolution (256×64 instead of
   512×128) and blurs every text, so the fix leaves the original font in place
   (`[textures] skip`).
@@ -202,6 +206,7 @@ file is the default.
 | `[textures] pack` | `poptex_d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
 | `[textures] bloom` | `1` | keep the game's bloom (the HD pack would remove it) |
 | `[textures] brightness` | `1.25` | brightness of the pack's textures, 1 = unchanged |
+| `[textures] only` | `hud` | pack textures to use: `hud` (the HUD only), `all`, or hex keys / ranges (`0B007B00-0B007BFF`) |
 | `[textures] skip` | `0B0041BB` | pack textures to leave to the game (hex keys from `poptex_d3d9.log`; default: the font) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
 | `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |

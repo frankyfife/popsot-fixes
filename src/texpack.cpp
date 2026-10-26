@@ -28,8 +28,10 @@
 // is read whenever a pixel shader is created, so with [textures] bloom=1 we
 // clear it in memory after loading and the game keeps its bloom.
 //
-// Single textures can be left out ([textures] skip, hex keys as in
-// poptex_d3d9.log). The HD pack replaces the font atlas 0B0041BB (512x128)
+// [textures] only (default: the HUD, the game's GameInterface world) uses just
+// the listed textures of the pack and turns its BF overlays off (see
+// SaveImports below). Single textures can be left out ([textures] skip, hex
+// keys as in poptex_d3d9.log). The HD pack replaces the font atlas 0B0041BB (512x128)
 // with a 256x64 one, which blurs every text; it is skipped by default.
 // Evgesha.JK starts with a 0x90-byte header (texture count at +0x18) and the
 // texture records (0x68 bytes, key at +0). The pack copies them into a heap
@@ -222,20 +224,43 @@ int FindEmptyTextures(HANDLE f, const BYTE* recs, DWORD count, DWORD* keys, int 
     return n;
 }
 
-// Leaves the textures with the keys in `list` (hex, separated by commas or
-// spaces) and the pack's empty ones to the game.
-void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
+// Hex keys and ranges ("0B007B00-0B007BFF"), separated by commas or spaces.
+struct KeyRange {
+    DWORD lo, hi;
+};
+
+int ParseKeys(const char* s, KeyRange* out, int max)
 {
-    DWORD keys[256];
-    int nkeys = 0;
-    for (const char* s = list; *s && nkeys < 64;) {
+    int n = 0;
+    while (s && *s && n < max) {
         char* end;
-        unsigned long k = strtoul(s, &end, 16);
+        unsigned long lo = strtoul(s, &end, 16);
         if (end == s) { s++; continue; }
-        keys[nkeys++] = k;
+        unsigned long hi = lo;
         s = end;
+        if (*s == '-') {
+            hi = strtoul(s + 1, &end, 16);
+            if (end == s + 1) hi = lo;
+            s = end;
+        }
+        out[n++] = { (DWORD)lo, (DWORD)hi };
     }
-    int nlisted = nkeys;
+    return n;
+}
+
+bool InKeys(DWORD key, const KeyRange* r, int n)
+{
+    for (int i = 0; i < n; i++)
+        if (key >= r[i].lo && key <= r[i].hi) return true;
+    return false;
+}
+
+// Leaves to the game the textures with the keys in `skip`, the pack's empty
+// ones and, if `only` is not empty, every texture whose key is not in `only`.
+void SkipTextures(HMODULE mod, const char* jkPath, const char* skip, const char* only)
+{
+    KeyRange skipKeys[64], onlyKeys[64];
+    int nskip = ParseKeys(skip, skipKeys, 64), nonly = ParseKeys(only, onlyKeys, 64);
     // Header and texture records from the file.
     HANDLE f = CreateFileA(jkPath, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
     if (f == INVALID_HANDLE_VALUE) return;
@@ -253,15 +278,29 @@ void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
             }
         }
     }
+    DWORD empty[256];
+    int nempty = 0;
     if (recs) {
         DWORD t0 = GetTickCount();
-        int nempty = FindEmptyTextures(f, recs, count, keys + nkeys, 256 - nkeys);
-        nkeys += nempty;
+        nempty = FindEmptyTextures(f, recs, count, empty, 256);
         Log("texture pack: %d empty textures found (%lu ms)", nempty, GetTickCount() - t0);
     }
     CloseHandle(f);
     if (!recs) return;
-    if (!nkeys) {
+    // Why each record is left to the game: 0 not, 1 listed, 2 empty, 3 not in `only`.
+    BYTE* why = (BYTE*)HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, count);
+    int nleft = 0;
+    for (DWORD i = 0; why && i < count; i++) {
+        DWORD key = *(const DWORD*)(recs + i * 0x68);
+        if (InKeys(key, skipKeys, nskip)) why[i] = 1;
+        else if (nonly && !InKeys(key, onlyKeys, nonly)) why[i] = 3;
+        else
+            for (int k = 0; k < nempty; k++)
+                if (empty[k] == key) why[i] = 2;
+        nleft += why[i] != 0;
+    }
+    if (!nleft) {
+        if (why) HeapFree(GetProcessHeap(), 0, why);
         HeapFree(GetProcessHeap(), 0, recs);
         return;
     }
@@ -288,29 +327,82 @@ void SkipTextures(HMODULE mod, const char* jkPath, const char* list)
         }
     }
     if (!table) {
-        Log("texture pack: texture table not found, [textures] skip not applied");
+        Log("texture pack: texture table not found, [textures] skip / only not applied");
     } else {
-        for (int k = 0; k < nkeys; k++) {
-            const char* result = "not in the pack";
-            for (DWORD i = 0; i < count; i++) {
-                const BYTE* frec = recs + i * 0x68;
-                if (*(const DWORD*)frec != keys[k]) continue;
-                // The two hashes (file record +0x28, 64 bytes) inside the pack's copy.
-                BYTE* rec = table + i * stride;
-                result = "not changed (hashes not found)";
-                for (DWORD o = 4; o + 64 <= stride; o += 4)
-                    if (memcmp(rec + o, frec + 0x28, 64) == 0) {
-                        for (int b = 0; b < 64; b++) rec[o + b] ^= 0xA5;
-                        result = k < nlisted ? "left to the game ([textures] skip)" : "left to the game";
-                        break;
-                    }
-                break;
+        int kept = 0, notOnly = 0, failed = 0;
+        for (DWORD i = 0; i < count; i++) {
+            if (!why[i]) { kept++; continue; }
+            const BYTE* frec = recs + i * 0x68;
+            // The two hashes (file record +0x28, 64 bytes) inside the pack's copy.
+            BYTE* rec = table + i * stride;
+            bool done = false;
+            for (DWORD o = 4; o + 64 <= stride && !done; o += 4)
+                if (memcmp(rec + o, frec + 0x28, 64) == 0) {
+                    for (int b = 0; b < 64; b++) rec[o + b] ^= 0xA5;
+                    done = true;
+                }
+            if (!done) failed++;
+            if (why[i] == 3) {
+                notOnly += done;
+                continue;
             }
-            Log("texture pack: texture %08lX%s %s", keys[k], k < nlisted ? "" : " (empty)", result);
+            Log("texture pack: texture %08lX%s %s", *(const DWORD*)frec, why[i] == 2 ? " (empty)" : "",
+                !done ? "not changed (hashes not found)"
+                      : why[i] == 1 ? "left to the game ([textures] skip)" : "left to the game");
         }
+        if (nonly)
+            Log("texture pack: %d of %lu textures used ([textures] only), %d left to the game%s", kept, count, notOnly,
+                failed ? ", some hashes not found" : "");
     }
+    HeapFree(GetProcessHeap(), 0, why);
     HeapFree(GetProcessHeap(), 0, recs);
 }
+
+// The pack's BF overlays: it points the executable's imports of CreateFileA /
+// CreateFileW / ReadFile / CloseHandle to itself and replaces 256 KB blocks of
+// prince.bf while the game reads them (world data of menu3D and of a few
+// levels). With [textures] only they belong to the part of the pack that is
+// left out: every import the pack changed is set back.
+struct Imports {
+    void** slot[1024];
+    void* value[1024];
+    int n;
+};
+
+void SaveImports(Imports& im)
+{
+    im.n = 0;
+    BYTE* base = (BYTE*)GetModuleHandleW(nullptr);
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    IMAGE_DATA_DIRECTORY dir = nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+    if (!dir.VirtualAddress) return;
+    for (IMAGE_IMPORT_DESCRIPTOR* d = (IMAGE_IMPORT_DESCRIPTOR*)(base + dir.VirtualAddress); d->Name; d++)
+        for (void** t = (void**)(base + d->FirstThunk); *t && im.n < 1024; t++) {
+            im.slot[im.n] = t;
+            im.value[im.n++] = *t;
+        }
+}
+
+int RestoreImports(const Imports& im, HMODULE mod)
+{
+    BYTE* base = (BYTE*)mod;
+    IMAGE_NT_HEADERS* nt = (IMAGE_NT_HEADERS*)(base + ((IMAGE_DOS_HEADER*)base)->e_lfanew);
+    ULONG_PTR lo = (ULONG_PTR)base, hi = lo + nt->OptionalHeader.SizeOfImage;
+    int n = 0;
+    for (int i = 0; i < im.n; i++) {
+        ULONG_PTR v = (ULONG_PTR)*im.slot[i];
+        if (v == (ULONG_PTR)im.value[i] || v < lo || v >= hi) continue;
+        DWORD prot;
+        if (!VirtualProtect(im.slot[i], sizeof(void*), PAGE_READWRITE, &prot)) continue;
+        *im.slot[i] = im.value[i];
+        VirtualProtect(im.slot[i], sizeof(void*), prot, &prot);
+        n++;
+    }
+    return n;
+}
+
+Imports g_imports;
+bool g_noOverlays;
 
 // ---------------------------------------------------------------- brightness
 
@@ -497,7 +589,8 @@ void InstallBrightness()
 
 }  // namespace
 
-void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const char* skip, float brightness)
+void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const char* skip, const char* only,
+                  float brightness)
 {
     if (!file || !*file) return;
     g_brightness = brightness < 0.5f ? 0.5f : brightness > 2.0f ? 2.0f : brightness;
@@ -525,6 +618,8 @@ void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const c
     wchar_t original[MAX_PATH];
     wcscpy(original, name);
     bool renamed = wcslen(original) == 7 && RenameImage(original, L"POP.EXE") > 0;
+    g_noOverlays = only && *only;
+    if (g_noOverlays) SaveImports(g_imports);
     g_pack = LoadLibraryA(path);
     DWORD err = GetLastError();
     if (renamed) RenameImage(L"POP.EXE", original);
@@ -535,7 +630,10 @@ void TexPack_Load(const char* gameDir, const char* file, bool keepBloom, const c
     g_packCreate9 = GetProcAddress(g_pack, "Direct3DCreate9");
     Log("texture pack: %s loaded%s; its messages are in poptex_d3d9.log", file,
         renamed ? " (shown as POP.EXE while it started)" : "");
-    SkipTextures(g_pack, data, skip);
+    if (g_noOverlays)
+        Log("texture pack: %d imports set back, its BF overlays are off ([textures] only)",
+            RestoreImports(g_imports, g_pack));
+    SkipTextures(g_pack, data, skip, only);
     DWORD* flags = PackFlags(g_pack);
     if (flags && keepBloom && (*flags & 1)) {
         DWORD prot;
@@ -554,6 +652,10 @@ void TexPack_HookSystem()
     // Its Direct3DCreate9 hooks the system IDirect3D9 class (CreateDevice).
     IUnknown* d3d = ((IUnknown * (WINAPI*)(UINT))g_packCreate9)(32);
     if (d3d) d3d->Release();
+    if (g_noOverlays) {
+        int n = RestoreImports(g_imports, g_pack);
+        if (n) Log("texture pack: %d more imports set back", n);
+    }
     Log("texture pack: Direct3D interception installed (%p)", d3d);
 }
 
