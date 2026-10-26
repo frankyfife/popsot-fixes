@@ -32,7 +32,6 @@
 
 #define _CRT_SECURE_NO_WARNINGS
 #include <windows.h>
-#include <math.h>
 #include <string.h>
 #include "water.h"
 #include "gamepad.h"
@@ -77,37 +76,24 @@ Clock& ClockFor(BYTE* water, LONGLONG stepUs)
     return c;
 }
 
-// Diagnostics, every 5 s of game time per water object, in popfix.log.
-//
-// Water object: +4 game object (its world matrix pointer at +0xc), +0xc..+0x30
-// parameters (+0x1c drop height, +0x20 drops per tick, +0x24 "near" distance,
-// +0x2c 1 = no drops beyond it), +0x34 patches (+0x38 columns, +0x3c rows).
-// Patch: +0..+0xc x/y extent, +0x10/+0x1c corner heights, +0x124 impulses
-// waiting, +0x128 peak amplitude, +0x12c drop timer, +0x13c flags (1 culled,
-// 2 at rest, both cleared to zero). The step (0x6cf280) measures the
-// distance of a patch centre through the current matrix of the display data
-// (*(0x9ec518) +0x220, Xbox +0x250) with 0x79a990; beyond +0x24 it sets no drops
-// (+0x2c) and damps more. The camera's own position is at *(0x9ec518) +0xcc +0x30.
-typedef void(__cdecl* MulPoint_t)(float* out, const float* in, const void* m);
-const MulPoint_t MulPoint = (MulPoint_t)0x0079a990;
-BYTE** const g_display = (BYTE**)0x009ec518;
+// [debug] verbose: every 5 s of game time per water object, in popfix.log.
+// Water object: +0x1c drop height, +0x20 drops per tick, +0x34 patches (+0x38
+// columns, +0x3c rows). Patch: +0x124 impulses waiting, +0x128 peak amplitude,
+// +0x13c flags (1 culled, 2 at rest).
+bool g_diag;
 
 void Diagnose(Clock& c, BYTE* w, int steps)
 {
+    if (!g_diag) return;
     c.calls++;
     c.steps += steps;
     if (*g_frameUs > 0) c.diagUs += *g_frameUs;
     if (c.diagUs < 5000000) return;
     __try {
-        BYTE* disp = *g_display;
         BYTE** patches = *(BYTE***)(w + 0x34);
         int cols = *(int*)(w + 0x38), rows = *(int*)(w + 0x3c);
-        const void* cur = disp ? *(void**)(disp + 0x220) : nullptr;
-        BYTE* go = *(BYTE**)(w + 4);
-        const void* world = go ? *(void**)(go + 0xc) : nullptr;
-        const float* cam = disp ? (const float*)(disp + 0xcc + 0x30) : nullptr;
         int n = 0, culled = 0, rest = 0, waiting = 0;
-        float peak = 0, nearGame = 1e30f, nearTrue = 1e30f;
+        float peak = 0;
         for (int i = 0; patches && i < cols * rows && i < 4096; i++) {
             BYTE* p = patches[i];
             if (!p) continue;
@@ -118,24 +104,10 @@ void Diagnose(Clock& c, BYTE* w, int steps)
             waiting += *(signed char*)(p + 0x124);
             float a = *(float*)(p + 0x128);
             if (a > peak) peak = a;
-            const float* e = (const float*)p;
-            float ctr[3] = { (e[0] + e[1]) * 0.5f, (e[2] + e[3]) * 0.5f, (e[4] + e[7]) * 0.5f }, v[3];
-            if (cur) {
-                MulPoint(v, ctr, cur);
-                float d = sqrtf(v[0] * v[0] + v[1] * v[1] + v[2] * v[2]);
-                if (d < nearGame) nearGame = d;
-            }
-            if (world && cam) {
-                MulPoint(v, ctr, world);
-                float dx = v[0] - cam[0], dy = v[1] - cam[1], dz = v[2] - cam[2];
-                float d = sqrtf(dx * dx + dy * dy + dz * dz);
-                if (d < nearTrue) nearTrue = d;
-            }
         }
-        Log("water %p: %d patches (%d culled, %d at rest), peak %.5f, %d impulses waiting; drops %d x %.3f,"
-            " near %.1f (far off %d); nearest patch %.1f by the step's matrix, %.1f from the camera; %d steps in %d calls",
-            w, n, culled, rest, peak, waiting, *(int*)(w + 0x20), *(float*)(w + 0x1c), *(float*)(w + 0x24),
-            *(int*)(w + 0x2c), nearGame, nearTrue, c.steps, c.calls);
+        Log("water %p: %d patches (%d culled, %d at rest), peak %.5f, %d impulses waiting; drops %d x %.3f;"
+            " %d steps in %d calls",
+            w, n, culled, rest, peak, waiting, *(int*)(w + 0x20), *(float*)(w + 0x1c), c.steps, c.calls);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         Log("water %p: diagnostics failed", w);
     }
@@ -194,8 +166,9 @@ void __cdecl WaterDriverHook(BYTE* water)
 
 }  // namespace
 
-void Water_Install(int stepHz)
+void Water_Install(int stepHz, bool diag)
 {
+    g_diag = diag;
     g_original = stepHz <= 0;
     if (stepHz > 0) g_stepHz = stepHz < 10 ? 10 : stepHz > 240 ? 240 : stepHz;
     o_waterDriver = (WaterDriver_t)Detour(kWaterDriver, kWaterDriverPrologue, sizeof(kWaterDriverPrologue),

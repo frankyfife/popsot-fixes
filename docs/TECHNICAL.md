@@ -134,35 +134,28 @@ between stay in the patch's list (up to 20 entries, `+0x124`) until the next ste
 `[water] step_rate` sets the rate (0 = the original once per frame); Shift+F10
 switches between the two in game. The surface moves at 30 Hz, as on the Xbox.
 
-### 4. Motion without contact (drops) – open
-On the Xbox the water moves on its own; on PC it moves only where something
-touches it. The motion on its own comes from the drop tick in the step (PS2
-prototype names: `WATER3D_Modifier_ComputePatch`, called by
-`WATER3D_Modifier_ComputePatches` = the driver): every 1/6 s of dt (`+0x12c`)
-`+0x20` drops of height `+0x1c` with alternating sign land on random points of
-each patch. The loader turns any non-zero drop count into 8.
+### 4. Motion without contact (drops)
+On the Xbox the water moves on its own; on the PC it seemed to move only where
+something touched it. That motion is the drop tick in the step (PS2 prototype
+names: `WATER3D_Modifier_ComputePatch`, called by `WATER3D_Modifier_ComputePatches`
+= the driver): every 1/6 s of dt (`+0x12c`) `+0x20` drops of height `+0x1c` with
+alternating sign land on random points of each patch. The loader turns any
+non-zero drop count into 8 and the height into −0.2.
 
-* Code: PC `0x6cf63b`–`0x6cf854` and Xbox `0x51f9e`–`0x52175` are the same,
-  including the random scale 1/32767 and the gate below.
-* Data: the water records in both `prince.bf` (LZO1X-compressed `.bin` worlds,
-  record = type `0x15`, flags, version 4, 0x44-byte matrix, then the fields
-  above) are identical: 21 on Xbox, 27 on PC (6 more in `0103_Hourglass` /
-  `0201_CouloirAller`), drops 50 (66, 55, 9), height −0.225 / −0.15 / +0.225,
-  "near" distance 20 (10, 30), `+0x2c` = 1 everywhere.
-* Gate: no drops are set while the patch is farther than `+0x24` from the
-  camera and `+0x2c` is 1; farther patches are also damped by `+0x24 / d ×
-  +0x28` instead of 0.97. That distance is the patch centre through the current
-  matrix of the display data (`*(0x9ec518) +0x220`, Xbox `*(0x758e34) +0x250`,
-  the top of the matrix stack `+0x7fc` / `+0x920`), so it is only the camera
-  distance when the driver runs with the water object's matrix pushed.
-* Patches marked culled (`+0x13c` bit 1, from `0x6b9580` / Xbox `0x7a690`) are
-  cleared every step; an impulse clears the flags (`0x6cee60`), which would also
-  explain motion only where something touches the water.
+* Code: PC `0x6cf63b`–`0x6cf854` and Xbox `0x51f9e`–`0x52175` are the same.
+* Data: the water records in both `prince.bf` (LZO1X-compressed `.bin` worlds;
+  record = type `0x15`, flags, version 4, 0x44-byte matrix, then the fields of
+  the loader) are identical: 21 on Xbox, 27 on PC (6 more in `0103_Hourglass` /
+  `0201_CouloirAller`), drops 50 (66, 55, 9) in every level.
+* Measured in game (pool in the hall after the first fight, standing still,
+  59 fps, `[debug] verbose=1`): the drops run on PC too, no patch is culled. The
+  peak amplitude of the 4 patches is 0.13–0.20 with the 30 Hz step and 0.04–0.06
+  once per frame. Each drop goes in as a force × dt and is damped per step, so
+  at 59 fps it fades to a quarter before it can be seen; the user confirms that
+  with the 30 Hz step the water behaves as on the Xbox.
 
-`water.cpp` writes every 5 s per water object to `popfix.log`: patches, culled,
-at rest, peak amplitude, impulses waiting, the drop parameters and the nearest
-patch distance by the step's matrix and from the camera itself. Those lines
-decide between the gate and the culling.
+With `[debug] verbose=1` `water.cpp` writes every 5 s per water object the patch
+states, peak amplitude, impulses waiting and steps per calls to `popfix.log`.
 
 ### Water option gate
 The water pass only runs when the video option *Water* is on (config struct

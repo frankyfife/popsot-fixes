@@ -1207,7 +1207,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
             float f = (float)atof(v);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;
-            Water_Install(GetPrivateProfileIntA("water", "step_rate", 30, g_iniPath));
+            Water_Install(GetPrivateProfileIntA("water", "step_rate", 30, g_iniPath), g_verbose);
             if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
             GetPrivateProfileStringA("post", "blur_radius", "auto", v, sizeof(v), g_iniPath);
             g_blurRadius = _stricmp(v, "auto") == 0 ? 0.0f : (float)atof(v);
