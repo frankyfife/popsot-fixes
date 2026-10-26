@@ -133,7 +133,7 @@ Installation:
 
 Notes:
 * By default only the pack's HUD is used: health bar, its frame, sand tanks and ring
-  (the 26 textures of the game's `GameInterface` world, keys `0B007Bxx`, `0B008389`,
+  (25 textures of the game's `GameInterface` world, keys `0B007Bxx`, `0B008389`,
   `0B008C14`, `0B008C15`). The rest of the pack does not fit the game's look; it and
   the pack's changes to `prince.bf` stay off. `[textures] only=all` uses the whole pack.
 * The pack's font replacement is only half the original resolution (256×64 instead of
