@@ -9,6 +9,8 @@
 //    refraction offset (ZOFFSET/ZMAX 1/3 instead of the Xbox's 3/10); the Xbox
 //    values are restored.
 // 3. Controller navigation for the mouse-only front-end menus (menupad.cpp).
+// 4. Water waves: the wave simulation is stepped at the Xbox's 30 Hz instead of
+//    once per rendered frame (water.cpp).
 //
 // F10 toggles fixes 1 and 2 at runtime; diagnostics go to popfix.log.
 //
@@ -33,6 +35,7 @@
 #include "video.h"
 #include "texpack.h"
 #include "cheats.h"
+#include "water.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -738,6 +741,7 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     MenuPad_OnPresent();
     MenuCam_OnPresent(keys);
     Cheats_OnPresent(keys);
+    Water_OnPresent(keys);
     Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
     if (g_verbose) Trace_ProbeMenuManager();
@@ -1201,6 +1205,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
             float f = (float)atof(v);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;
+            Water_Install(GetPrivateProfileIntA("water", "step_rate", 30, g_iniPath));
             if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
             GetPrivateProfileStringA("post", "blur_radius", "auto", v, sizeof(v), g_iniPath);
             g_blurRadius = _stricmp(v, "auto") == 0 ? 0.0f : (float)atof(v);

@@ -8,16 +8,28 @@ the Xbox `default.xbe` (USA). The Xbox side was analysed with Ghidra +
 ## Water: what is the same on both platforms
 
 The Jade engine water is a CPU heightfield simulation. The PC executable contains
-all of it; the code is line-for-line equivalent to the Xbox build, including every
-constant (damping, thresholds, a random "rain drop" tick every 1/6 s, etc.).
+all of it; the code is line-for-line equivalent to the Xbox build (PC x87, Xbox SSE),
+including every constant. Compared instruction by instruction:
 
 | Part | PC | Xbox |
 |---|---|---|
 | Per-patch simulation step | `0x6cf280` | `0x51c00` |
-| Impulses from characters / objects | `0x6cee60` | `0x51800` |
+| Impulses into the patches (clamped to ±1, ×1.0 / ×1.5) | `0x6cee60` | `0x51800` |
 | Normals from heights (scale 4.0) | `0x6cf100` | `0x51a70` |
-| Heights → vertex buffer | `0x6d0970` | `0x53190` |
-| Tile system update / edge exchange | `0x6cfcb0` | – |
+| Heights → vertex buffer (no height scale) | `0x6d0970` | `0x53190` |
+| Driver: frame time, culling, steps, edge exchange | `0x6cfcb0` | `0x525a0` |
+| Water modifier apply: patches, grid 300/100 per unit + 2, at least 4 | `0x6d12b0` | `0x53550` |
+| Water modifier loader | `0x6d17d0` | `0x53a90` |
+| Perturber (impulses from moving objects) apply / loader | `0x6dd1a0` / `0x6dd920` | `0x61f20` / `0x624f0` |
+| Done flags cleared once per world render | `0x6cee30` (from `0x6d7b50`) | inline at `0x30548` |
+
+The loaders overwrite the data on both platforms with the same values: velocity
+damping 0.97 (`+0xc`), wave speed 3.5 (`+0x10`), rain drop −0.2 (`+0x1c`), 8 drops
+per tick (`+0x20`, if any), impulse factor 1.5 / 1.0 (`+0x18`), resolution 300
+(`+0x40`); the perturber's strength factor is 1.8. The rest of the step's
+constants (thresholds 1e-5 / 0.0005 / 0.001, fade 2000 / 10000, random scale
+1/32767, rain tick 0.16666 s, frame time ×1e-6 capped at 0.033334 s, perturber
+factors 5 / 50) are equal too.
 
 Rendering is a screen-space refraction:
 
@@ -79,6 +91,48 @@ The screen-space offset is multiplied by `min(eye_z, ZMAX) + ZOFFSET`.
 `REFRACT` was correctly converted from Xbox pixel units to normalised coordinates, but
 the depth scale was lowered, making the refraction about 3.25× weaker. The proxy
 restores 3 / 10 when the game uploads these constants.
+
+### 3. Wave simulation rate
+The driver (`0x6cfcb0` / Xbox `0x525a0`) runs once per frame for every water object
+(done flag `+0x8c` / Xbox `+0xa0`). It turns the frame time (µs, game speed applied:
+PC qword `0x80cc48` from the frame clock `0x41aa80`, Xbox `0x7654e0`) into dt
+(`0xb0b750` / `0x4640e0`) and steps each patch:
+
+```
+v += k·dt·(laplacian + impulses)     k = 3.5
+h += k·dt·v
+v *= 0.97                            (or the distance fade, once per step)
+```
+
+Damping and the distance fade are applied per call, not per second, and every
+impulse is a force times dt. The perturber's strength is the distance its object
+moved since the last frame (×1.8, plus 5× the vertical part), so it shrinks with
+the frame time as well.
+
+On the Xbox the game logic runs at a fixed 30 Hz: the frame clock `0xdb740` steps
+1,000,000 / (refresh / 2) µs, 33,333 µs at NTSC 60 Hz (found in rePOP_ff, a static
+recompilation of the Xbox retail build: its `docs/TRANSFER.md` "Game logic at 60 Hz"
+and `docs/VALIDATION.md` 2026-10-22, where the same fix is applied to the recompiled
+Xbox build). So the console steps its water 30 times a second with dt = 1/30 s. The
+PC version steps once per rendered frame:
+
+| Frame rate | Wave motion left after 1 s (0.97ⁿ) | Push per second from a walking Prince |
+|---|---|---|
+| 30 (Xbox) | 40 % | 1 |
+| 60 | 16 % | 1/2 |
+| 144 | 1 % | 1/5 |
+
+The surface stays nearly flat, and since the water shader takes the Fresnel term and
+the refraction offset from the normals, the refraction fades with it. At exactly
+30 fps the PC version computes the same as the Xbox.
+
+**Fix (`water.cpp`):** the driver is detoured. Each water object adds up its frame
+times and is stepped once for every 1/30 s of game time (at most 4 steps per frame),
+with `0x80cc48` set to 33,333 µs for that call and restored after it. On frames
+without a step only the done flag is set, as the driver would. Impulses arriving in
+between stay in the patch's list (up to 20 entries, `+0x124`) until the next step.
+`[water] step_rate` sets the rate (0 = the original once per frame); Ctrl+F11
+switches between the two in game. The surface moves at 30 Hz, as on the Xbox.
 
 ### Water option gate
 The water pass only runs when the video option *Water* is on (config struct

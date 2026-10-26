@@ -9,12 +9,13 @@ The fixes are a single drop-in `dx.dll` that sits between the game and Direct3D 
 
 ### Water that looks like the Xbox version
 The PC port renders water with the same wave simulation and the same shaders as the
-Xbox version, but two things made it look flat, milky and blocky:
+Xbox version, but three things made it look flat, milky and blocky:
 
 | Problem on PC | Cause | Fix |
 |---|---|---|
 | Blocky, pixelated view through the water (and blocky motion blur / glow) at modern resolutions | Post effects are built from fixed 512×512 render targets and scaled back to the screen with point sampling | Full-screen downsamples get a full-resolution copy that is used instead; processed effect buffers are upscaled with linear filtering |
 | Barely visible light refraction | The port lowered the refraction depth scale (`ZOFFSET`/`ZMAX` = 1/3 instead of the Xbox's 3/10), making the distortion about 3× weaker | Xbox values are restored |
+| Calm, almost flat surface: small ripples behind the Prince that die out at once | The wave simulation damps its waves by a fixed factor per step and takes pushes per step. The Xbox steps it 30 times a second (its game logic runs at a fixed 30 Hz), the PC once per rendered frame – at 60 fps the waves lose 84 % of their motion per second instead of 60 %, at 144 fps 99 % | The water is stepped 30 times a second at any frame rate, as on the Xbox; Ctrl+F11 switches back to the original for comparison |
 
 Water colour and specular strength were already identical to the Xbox and are left alone.
 The refraction strength can be raised further in `popfix.ini` (default 1.5 × Xbox).
@@ -192,6 +193,7 @@ file is the default.
 | Setting | Default | Meaning |
 |---|---|---|
 | `[water] refraction` | `1.5` | refraction strength, 1.0 = Xbox |
+| `[water] step_rate` | `30` | wave simulation steps per second, 30 = Xbox, 0 = once per frame (original PC) |
 | `[post] blur_resolution` | `4` | size of the blur targets, 1 = original 512×512, up to 4× |
 | `[post] blur` | `1` | 0 disables the soft-focus blur |
 | `[post] blur_radius` | `auto` | blur width, 1 = original, auto = like an upscaling emulator |
