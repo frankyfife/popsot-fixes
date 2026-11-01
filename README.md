@@ -47,7 +47,9 @@ DirectInput wrapper.
 | D-pad / left stick | move | navigate |
 
 Face buttons are laid out like the Xbox version; shoulder buttons and triggers follow
-the PS2 version, because the original Xbox pad had no shoulder buttons. Sticks are
+the PS2 version, because the original Xbox pad had no shoulder buttons.
+`[controller] layout=xbox` swaps them like the Xbox version instead: LT rewind time, RT
+special action, LB alternate view, RB look (the hints follow). Sticks are
 analog with a round dead zone. The Back/View button is left unassigned (the PC port
 bound it to "quit game").
 
@@ -212,6 +214,7 @@ file is the default.
 | `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
 | `[menus] camera_start` / `camera_end` | empty | menu picture / end of the new-game flight (`x y z yaw pitch`), stored with the free camera |
+| `[controller] layout` | `ps2` | shoulder buttons and triggers: `ps2` (LB/RB rewind / special action) or `xbox` (LT/RT) |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |

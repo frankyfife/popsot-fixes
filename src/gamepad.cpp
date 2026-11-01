@@ -48,6 +48,7 @@ XInputGetState_t g_xinputGetState;
 XINPUT_GAMEPAD g_pad;
 bool g_padConnected;
 bool g_blockGame;  // free camera active: the game gets no input (Start excepted)
+bool g_xboxLayout;  // [controller] layout=xbox: triggers and shoulders swapped, see PadValue
 DWORD g_padSlot;  // XInput slot of g_pad
 DWORD g_padTick;
 
@@ -75,6 +76,10 @@ void RefreshPad()
 
 float Button(WORD mask) { return (g_pad.wButtons & mask) ? 1.0f : 0.0f; }
 float Trigger(BYTE value) { return value > XINPUT_GAMEPAD_TRIGGER_THRESHOLD ? 1.0f : 0.0f; }
+float LeftShoulder() { return Button(XINPUT_GAMEPAD_LEFT_SHOULDER); }
+float RightShoulder() { return Button(XINPUT_GAMEPAD_RIGHT_SHOULDER); }
+float LeftTrigger() { return Trigger(g_pad.bLeftTrigger); }
+float RightTrigger() { return Trigger(g_pad.bRightTrigger); }
 
 // Stick with a round dead zone, rescaled so that the output starts at 0 at the
 // dead zone edge and reaches 1 at full deflection. Returns false inside it.
@@ -99,11 +104,13 @@ float PadValue(unsigned action)
     case 3: return Button(XINPUT_GAMEPAD_Y);
     // The original Xbox pad had no shoulder buttons. The PS2 layout of the same
     // game (L1 rewind, R1 special action, L2 alternate view, R2 look) maps better
-    // onto a modern pad, so shoulders and triggers follow it:
-    case 4: return Trigger(g_pad.bLeftTrigger);            // Black: alternate view (text code \p5\l)
-    case 5: return Trigger(g_pad.bRightTrigger);           // White: look (text code \p5\r)
-    case 6: return Button(XINPUT_GAMEPAD_LEFT_SHOULDER);   // L trigger: rewind (PS2 L1)
-    case 7: return Button(XINPUT_GAMEPAD_RIGHT_SHOULDER);  // R trigger: special action (PS2 R1)
+    // onto a modern pad, so by default shoulders and triggers follow it.
+    // [controller] layout=xbox keeps the Xbox's places instead: the triggers
+    // rewind and special action, the shoulder buttons take Black and White.
+    case 4: return g_xboxLayout ? LeftShoulder() : LeftTrigger();    // Black: alternate view (text code \p5\l)
+    case 5: return g_xboxLayout ? RightShoulder() : RightTrigger();  // White: look (text code \p5\r)
+    case 6: return g_xboxLayout ? LeftTrigger() : LeftShoulder();    // L trigger: rewind (PS2 L1)
+    case 7: return g_xboxLayout ? RightTrigger() : RightShoulder();  // R trigger: special action (PS2 R1)
     case 9: return Button(XINPUT_GAMEPAD_START);
     case 10: return Button(XINPUT_GAMEPAD_RIGHT_THUMB);
     case 11: return Button(XINPUT_GAMEPAD_LEFT_THUMB);
@@ -169,7 +176,7 @@ void __cdecl GetStickHook(int pad, float* out, int stick)
 // return its button names, following the mapping above:
 //   A jump -> A, B cancel -> B, C attack -> X, D dagger -> Y, L rewind -> LB,
 //   R special action -> RB, l alternate view -> LT, r look -> RT,
-//   M (also "\d2\") movement -> LS.
+//   M (also "\d2\") movement -> LS; with layout=xbox L/R -> LT/RT, l/r -> LB/RB.
 const DWORD kPromptText = 0x0041a510;
 const unsigned char kPromptTextPrologue[] = { 0x83, 0xEC, 0x08, 0xB0, 0xFF, 0x56 };  // 3 whole instructions
 
@@ -183,10 +190,10 @@ const char* PadPrompt(char code)
     case 'B': return "B";
     case 'C': return "X";
     case 'D': return "Y";
-    case 'L': return "LB";
-    case 'R': return "RB";
-    case 'l': return "LT";
-    case 'r': return "RT";
+    case 'L': return g_xboxLayout ? "LT" : "LB";
+    case 'R': return g_xboxLayout ? "RT" : "RB";
+    case 'l': return g_xboxLayout ? "LB" : "LT";
+    case 'r': return g_xboxLayout ? "RB" : "RT";
     case 'M': return "LS";
     }
     return nullptr;
@@ -462,3 +469,5 @@ void Gamepad_Pulse(int count)
 }
 
 void Gamepad_SetPromptMode(int mode) { g_promptMode = mode; }
+
+void Gamepad_SetXboxLayout(bool xbox) { g_xboxLayout = xbox; }

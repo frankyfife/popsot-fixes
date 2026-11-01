@@ -1236,6 +1236,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             g_texPackBrightness = (float)atof(v);
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
+            GetPrivateProfileStringA("controller", "layout", "ps2", v, sizeof(v), g_iniPath);
+            Gamepad_SetXboxLayout(_stricmp(v, "xbox") == 0);
         }
         if (slash) {
             slash[1] = 0;
