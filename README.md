@@ -235,7 +235,8 @@ code it touches before changing it and switches itself off on an unknown build.
 ## Installation
 
 1. In the game folder, rename GOG's `dx.dll` to `dx_gog.dll`.
-2. Copy `dx.dll` from this project into the game folder.
+2. Download the zip from [Releases](https://github.com/frankyfife/popsot-fixes/releases)
+   (or build it, see below) and copy its `dx.dll` into the game folder.
 3. Optional: copy `popfix.ini` next to it to change the settings.
 
 GOG's own compatibility layer keeps working; this DLL forwards everything to it.
