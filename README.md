@@ -246,7 +246,8 @@ game folder.
 
 ## Building
 
-Requires the Visual Studio 2022 Build Tools (C++ x86). Run `build.bat`; the result is
+Requires Visual Studio 2022 or newer – the Build Tools or any edition – with the C++
+x86/x64 tools. Run `build.bat` (it finds the installation with `vswhere`); the result is
 `build\dx.dll`.
 
 ## How it works
