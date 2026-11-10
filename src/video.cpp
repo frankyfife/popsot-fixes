@@ -434,6 +434,7 @@ int WINAPI BinkCopyToBufferHook(void* bink, void* dest, int pitch, DWORD height,
         r->readPos = (r->readPos + 1) % kQueue;
     }
     UINT rowBytes = r->width * 4;
+    if ((UINT)pitch < rowBytes) return g_binkCopyToBuffer(bink, dest, pitch, height, x, y, flags);  // texture not enlarged
     for (UINT row = 0; row < r->height; row++)
         memcpy((BYTE*)dest + (size_t)row * pitch, r->frame + (size_t)row * rowBytes, rowBytes);
     return 0;

@@ -23,7 +23,7 @@
 //
 // Fix: the driver is detoured. Every water object adds up its frame times and
 // is stepped once for every 1/30 s of game time, with the frame time set to
-// 33333 us for that call (the same as reSOT does for the Xbox recomp). On
+// 33333 us for that call (the same as rePOP_ff does for the Xbox recompilation). On
 // other frames only the driver's done flag (+0x8c) is set, as the driver
 // itself would. Impulses that arrive in between stay in the field's list
 // (up to 20) until the next step. [water] step_rate in popfix.ini (0 = once per

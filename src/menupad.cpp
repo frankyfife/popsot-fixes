@@ -22,6 +22,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "menupad.h"
+#include "gamepad.h"
 
 void Log(const char* fmt, ...);
 
@@ -362,7 +363,7 @@ void Update()
     if (!mgr) return;
 
     XINPUT_GAMEPAD pad;
-    bool havePad = ReadPad(pad);
+    bool havePad = !Gamepad_GameBlocked() && ReadPad(pad);  // the free camera has the pad
     WORD buttons = havePad ? pad.wButtons : 0;
     WORD pressed = buttons & ~g_prevButtons;
     g_prevButtons = buttons;

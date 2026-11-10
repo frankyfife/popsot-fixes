@@ -461,6 +461,8 @@ bool Gamepad_Read(XINPUT_GAMEPAD* pad)
 
 void Gamepad_BlockGame(bool block) { g_blockGame = block; }
 
+bool Gamepad_GameBlocked() { return g_blockGame; }
+
 void Gamepad_Pulse(int count)
 {
     g_pulseStart = GetTickCount();

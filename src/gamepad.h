@@ -8,6 +8,7 @@ void Gamepad_OnFrame(HWND gameWindow);  // once per rendered frame
 void Gamepad_Shutdown();                // stop the motors
 bool Gamepad_Read(XINPUT_GAMEPAD* pad);  // current controller state, false if none
 void Gamepad_BlockGame(bool block);      // withhold all game input except Start (free camera)
+bool Gamepad_GameBlocked();              // the free camera has the pad (menus ignore it)
 void Gamepad_SetPromptMode(int mode);    // button prompts: 0 auto, 1 controller, 2 keyboard
 void Gamepad_SetXboxLayout(bool xbox);   // false: PS2 shoulder/trigger layout, true: Xbox
 void Gamepad_Pulse(int count);           // `count` short buzzes as a confirmation

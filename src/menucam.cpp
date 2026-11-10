@@ -207,7 +207,7 @@ float StickAxis(SHORT v, SHORT deadZone)
     return f < -1.0f ? -1.0f : f > 1.0f ? 1.0f : f;
 }
 
-void UpdateFreeCam()
+void UpdateFreeCam(bool keys)
 {
     LARGE_INTEGER now, freq;
     QueryPerformanceCounter(&now);
@@ -217,7 +217,7 @@ void UpdateFreeCam()
     if (dt > 0.1f) dt = 0.1f;
     XINPUT_GAMEPAD pad;
     if (!Gamepad_Read(&pad)) memset(&pad, 0, sizeof(pad));
-    auto key = [](int vk) { return GetAsyncKeyState(vk) < 0 ? 1.0f : 0.0f; };
+    auto key = [keys](int vk) { return keys && GetAsyncKeyState(vk) < 0 ? 1.0f : 0.0f; };  // game window only
     bool freeze = (pad.wButtons & XINPUT_GAMEPAD_Y) || key('P') > 0;
     if (freeze && !g_free.freezeDown) SetFrozen(!g_free.frozen);
     g_free.freezeDown = freeze;
@@ -587,7 +587,7 @@ void MenuCam_OnPresent(bool keys)
         if (g_free.active) StopFreeCam();
         else StartFreeCam();
     }
-    if (g_free.active) UpdateFreeCam();
+    if (g_free.active) UpdateFreeCam(keys);
     if (!keys) return;
     if (g_free.active) {
         // F6 / X and F7 / B store the free camera as the menu picture and as

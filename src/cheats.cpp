@@ -469,7 +469,7 @@ void Cheats_OnPresent(bool keys)
     if (k.ctrl && k.f4 && NextSword()) Gamepad_Pulse(1);
     if (k.ctrl && k.f5) Dump();
 
-    if (BYTE* p = PrinceVars()) {
+    if (BYTE* p = LevelPrinceVars()) {  // not in the front end, where the pointer is stale
         int& life = *(int*)(p + kLife);
         int max = *(int*)(p + kLifeMax);
         if (g_invulnerable && max > 0 && max < 100000 && life > 0 && life < max) life = max;

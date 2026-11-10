@@ -411,18 +411,29 @@ static void EndDraw(IDirect3DDevice9* dev, unsigned mask)
 }
 
 // ---------------------------------------------------------------- device hooks
-static HRESULT STDMETHODCALLTYPE hk_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
+// Reset frees the default-pool textures and sets every texture stage and
+// sampler state back to its default without going through our hooks.
+static void OnReset(D3DPRESENT_PARAMETERS* pp)
 {
     ReleaseShadows();
     g_numBig = 0;
     g_bigRT = 0;
     if (pp) g_bbHeight = pp->BackBufferHeight;
+    for (int s = 0; s < 4; s++) {
+        g_boundTex[s] = nullptr;
+        g_magFilter[s] = g_minFilter[s] = D3DTEXF_POINT;
+    }
+}
+
+static HRESULT STDMETHODCALLTYPE hk_Reset(IDirect3DDevice9* dev, D3DPRESENT_PARAMETERS* pp)
+{
+    OnReset(pp);
     return o_Reset(dev, pp);
 }
 
 static HRESULT STDMETHODCALLTYPE hk_ResetEx(IDirect3DDevice9Ex* dev, D3DPRESENT_PARAMETERS* pp, D3DDISPLAYMODEEX* fm)
 {
-    ReleaseShadows();
+    OnReset(pp);
     return o_ResetEx(dev, pp, fm);
 }
 
@@ -1215,7 +1226,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             GetPrivateProfileStringA("post", "blur_radius", "auto", v, sizeof(v), g_iniPath);
             g_blurRadius = _stricmp(v, "auto") == 0 ? 0.0f : (float)atof(v);
             g_blurAfterGlow = GetPrivateProfileIntA("post", "blur_after_glow", 1, g_iniPath) != 0;
-            UINT k = GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
+            int k = (int)GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
             g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
             GetPrivateProfileStringA("menus", "camera_forward", "3.5", v, sizeof(v), g_iniPath);
             g_menuCamForward = (float)atof(v);
@@ -1264,6 +1275,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     } else if (reason == DLL_PROCESS_DETACH) {
         Gamepad_Shutdown();
         if (g_log) fclose(g_log);
+        g_log = nullptr;  // late Log calls (other DLLs' detach, the crash logger) write nothing
     }
     return TRUE;
 }
