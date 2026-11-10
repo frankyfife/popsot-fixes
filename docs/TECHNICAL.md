@@ -631,3 +631,13 @@ are the game's own strings. The dark panel behind the rows
 layout every frame before drawing, so `ui.cpp` moves the drawn quad itself to lines 109
 to 419 (106 to 442 with the sword row, which ends at line 398) while the page is shown (its texture has frayed, transparent margins: about
 13.5 % of the height at the top and 8.5 % at the bottom).
+
+## Debugging
+
+* `[debug] verbose=1` writes detailed diagnostics to `popfix.log` (menu tracing,
+  per-frame statistics every 300 frames).
+* F8 logs the draw calls and device state of one frame (`cap:` lines); with
+  `verbose=1` it also writes the enlarged blur targets after each draw into them as raw
+  BGRA files (`popfix_rt_<n>_<w>x<h>.raw`, at most 40).
+* Ctrl+F5 writes the prince's variables to `popfix_dump_<n>.bin`, for finding further
+  values by comparing dumps.

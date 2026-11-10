@@ -4,6 +4,31 @@ Brings the PC (GOG) release of *Prince of Persia: The Sands of Time* closer to t
 original Xbox version, without touching any game files.
 
 The fixes are a single drop-in `dx.dll` that sits between the game and Direct3D 9.
+Downloads are on the [Releases](https://github.com/frankyfife/popsot-fixes/releases) page.
+
+## What's new
+
+**1.0.2**
+* README: overview of the changes per version.
+
+**1.0.1**
+* Free camera in the main menu: the menus ignore the controller while it is on, so
+  X / B only store the camera (B used to leave the menu as well); its keys only count
+  in the game window.
+* Cheats no longer write into freed memory while the main menu is shown.
+* Alt+Tab / display reset no longer leaves references to freed textures (possible
+  crash).
+* Videos: a replacement picture is only copied into a texture large enough for it.
+* README: table of all keys, corrected controller table, value ranges of the settings.
+
+**1.0.0** – first release, with the latest additions:
+* **Water waves at the Xbox's 30 Hz:** the wave simulation is stepped 30 times a
+  second at any frame rate, as on the Xbox, so the surface keeps moving at 60 fps
+  and above instead of going flat (`[water] step_rate`, Shift+F10 compares).
+* **Optional Xbox layout** for shoulder buttons and triggers (`[controller]
+  layout=xbox`).
+* **Texture pack: only the HUD by default** (`[textures] only`).
+* `build.bat` finds any Visual Studio 2022+ installation.
 
 ## What it does
 
@@ -157,8 +182,8 @@ Notes:
   pack, `tools/repair_hd_pack.py` fills 31 of them with its versions scaled down to the
   HD size (Python 3 with Pillow 11.2+ and numpy; writes `Evgesha.JK.bak` first):
   `python repair_hd_pack.py "<game folder>\Evgesha.JK" "<4K pack>.zip"`
-* The 4K pack was not tested. The game is a 32-bit program limited to 2 GB of memory,
-  which the 4K textures may exceed.
+* The 4K pack is not recommended: the game is a 32-bit program limited to 2 GB of
+  memory, which the 4K textures may exceed.
 * To play without the pack, remove the two files or set `[textures] pack=` (empty).
 
 All credit for the textures goes to Evgeshajk; the pack is not part of this project.
@@ -259,11 +284,10 @@ Keys in the game (the game window must be in the foreground):
 | F6 / F7 (main menu) | menu camera closer / further, with Shift down / up, with Ctrl left / right |
 | Ctrl+F1 / F2 / F3 | cheats invulnerable / infinite sand / one-hit kills |
 | Ctrl+F4 | next sword |
-| F8 | frame capture into `popfix.log` (debugging; with `verbose=1` also the blur targets as raw files) |
-| Ctrl+F5 | dump the prince's variables to `popfix_dump_<n>.bin` (debugging) |
 
 Diagnostics (and a crash report, if the game crashes) are written to `popfix.log` in the
-game folder.
+game folder. Keys for debugging are described in
+[docs/TECHNICAL.md](docs/TECHNICAL.md#debugging).
 
 ## Building
 
