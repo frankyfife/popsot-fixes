@@ -44,14 +44,16 @@ DirectInput wrapper.
 | LT | alternate view | |
 | RT | look | |
 | Start | pause | |
-| D-pad / left stick | move | navigate |
+| Back / View | free camera | free camera |
+| Left stick | move | navigate |
+| D-pad | | navigate |
 
 Face buttons are laid out like the Xbox version; shoulder buttons and triggers follow
 the PS2 version, because the original Xbox pad had no shoulder buttons.
 `[controller] layout=xbox` swaps them like the Xbox version instead: LT rewind time, RT
 special action, LB alternate view, RB look (the hints follow). Sticks are
-analog with a round dead zone. The Back/View button is left unassigned (the PC port
-bound it to "quit game").
+analog with a round dead zone. The Back/View button is not passed to the game (the PC
+port bound it to "quit game"); it toggles the free camera.
 
 The PC menus are mouse menus. The controller drives them directly: the highlight moves
 from element to element, lists (profiles, save games) scroll and are selected with A,
@@ -63,8 +65,10 @@ Tutorial and menu hints name the controller buttons while a controller is connec
 ### Free camera
 Back (View) or F9 detaches the camera: left stick / WASD move, right stick / arrow keys
 look, LT / RT or Q / E move down / up, LB / Ctrl slow down, RB / Shift speed up, Y / P
-freezes the world, F6 / X and F7 / B store the main menu's camera (see below). The game
-gets no input while the free camera is on (Start still pauses).
+freezes the world, F6 / X and F7 / B store the main menu's camera (see below). While the
+free camera is on, the game and its menus get no controller input and no gameplay keys
+(Start still pauses); keys that a menu reads directly, such as the arrow keys, still
+reach it.
 
 ### Vibration
 The PC port removed force feedback completely, although the game still triggers it.
@@ -75,14 +79,15 @@ when the game window loses focus.
 ### Main menu on wide screens
 The main menu's 3D scene was built for 4:3; on wide screens its edges show. Like the
 PS3 HD version, the menu camera is moved – forward and up here (adjustable in the main menu:
-F6 / F7, with Shift up / down, with Ctrl left / right). When a new game starts, the camera flies to the
-Prince without a jump.
+F6 / F7, with Shift down / up, with Ctrl left / right). When a new game starts, the camera
+flies to the Prince without a jump.
 
 The menu picture and the end of that flight can also be placed freely: in the main menu
 (or anywhere else) turn on the free camera, fly to the spot and press **F6 / X** to use
-it as the menu picture or **F7 / B** to use it as the flight's end; Ctrl+F6 / Ctrl+F7
-return to the default. The controller buzzes once for the menu picture, twice for the end
-and three times when cleared. The positions are stored in `popfix.ini`. The flight then runs
+it as the menu picture or **F7 / B** to use it as the flight's end; with the free camera
+on, Ctrl+F6 / Ctrl+F7 return to the default. The controller buzzes once for the menu
+picture, twice for the end and three times when cleared. The positions are stored in
+`popfix.ini`; while a menu picture is set, the offsets and F6 / F7 have no effect. The flight then runs
 from the menu picture to the end picture; the camera stays there while the Prince is on
 the balcony and blends over to the game's camera when it moves on.
 
@@ -125,7 +130,7 @@ game data is identical to the retail data (every patched part of `prince.bf` mat
 the fix loads the pack itself.
 
 Installation:
-1. Install this fix (see above).
+1. Install this fix (see [Installation](#installation)).
 2. Download the HD texture pack from Evgeshajk's Nexus Mods page and copy both files
    from its archive into the game folder, next to `dx.dll`: `Evgesha.JK` as it is, and
    `d3d9.dll` **renamed to `poptex_d3d9.dll`**. Named `d3d9.dll`, it is mistaken for
@@ -198,12 +203,12 @@ file is the default.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `[water] refraction` | `1.5` | refraction strength, 1.0 = Xbox |
-| `[water] step_rate` | `30` | wave simulation steps per second, 30 = Xbox, 0 = once per frame (original PC) |
+| `[water] refraction` | `1.5` | refraction strength, 1.0 = Xbox (up to 10) |
+| `[water] step_rate` | `30` | wave simulation steps per second (10–240), 30 = Xbox, 0 = once per frame (original PC) |
 | `[post] blur_resolution` | `4` | size of the blur targets, 1 = original 512×512, up to 4× |
 | `[post] blur` | `1` | 0 disables the soft-focus blur |
 | `[post] blur_radius` | `auto` | blur width, 1 = original, auto = like an upscaling emulator |
-| `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost) |
+| `[post] blur_after_glow` | `1` | the blur overlay includes the glow (no grey ghost); needs enlarged blur targets (`blur_resolution` ≥ 2, screen height ≥ 1024) |
 | `[menus] console` | `0` | 1 = Xbox console menus (experimental) |
 | `[textures] pack` | `poptex_d3d9.dll` | PoP Texture Studio pack to load (with `Evgesha.JK`), empty = none |
 | `[textures] bloom` | `1` | keep the game's bloom (the HD pack would remove it) |
@@ -211,7 +216,7 @@ file is the default.
 | `[textures] only` | `hud` | pack textures to use: `hud` (the HUD only), `all`, or hex keys / ranges (`0B007B00-0B007BFF`) |
 | `[textures] skip` | `0B0041BB` | pack textures to leave to the game (hex keys from `poptex_d3d9.log`; default: the font) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
-| `[ui] scale` | `1` | size of menus, texts and HUD (e.g. 0.85 = smaller) |
+| `[ui] scale` | `1` | size of menus, texts and HUD (0.25–2, e.g. 0.85 = smaller) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
 | `[menus] camera_start` / `camera_end` | empty | menu picture / end of the new-game flight (`x y z yaw pitch`), stored with the free camera |
 | `[controller] layout` | `ps2` | shoulder buttons and triggers: `ps2` (LB/RB rewind / special action) or `xbox` (LT/RT) |
@@ -243,8 +248,20 @@ GOG's own compatibility layer keeps working; this DLL forwards everything to it.
 
 **Uninstall:** delete `dx.dll` and rename `dx_gog.dll` back to `dx.dll`.
 
-**F10** toggles the graphics fixes while playing, for comparison. **F9** toggles the free
-camera.
+Keys in the game (the game window must be in the foreground):
+
+| Key | Function |
+|---|---|
+| F9 / Back | free camera on / off |
+| F10 | post-effect filtering and refraction fixes on / off, for comparison |
+| Shift+F10 | wave simulation at 30 Hz / once per frame (one buzz = 30 Hz, two = original) |
+| Ctrl+F10 | soft-focus blur on / off |
+| F6 / F7 (main menu) | menu camera closer / further, with Shift down / up, with Ctrl left / right |
+| Ctrl+F1 / F2 / F3 | cheats invulnerable / infinite sand / one-hit kills |
+| Ctrl+F4 | next sword |
+| F8 | frame capture into `popfix.log` (debugging; with `verbose=1` also the blur targets as raw files) |
+| Ctrl+F5 | dump the prince's variables to `popfix_dump_<n>.bin` (debugging) |
+
 Diagnostics (and a crash report, if the game crashes) are written to `popfix.log` in the
 game folder.
 

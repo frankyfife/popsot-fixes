@@ -196,8 +196,9 @@ resolution.
 * `[post] blur_radius`: the blur pass's source size is divided by the radius, so the
   tap step becomes one texel of the enlarged target (auto) or any fraction of the
   original.
-* `[post] blur_after_glow`: `0x670710` is detoured; before it runs, the current back
-  buffer (glow included) is copied into its frame texture.
+* `[post] blur_after_glow`: `0x670710` is detoured together with the enlarged targets (so
+  only while they are in use); before it runs, the current back buffer (glow included)
+  is copied into its frame texture.
 * Render targets sampled while drawing into a smaller target are filtered linearly, so
   2:1 steps do not pick one side of a texel border.
 * `[post] blur=0` turns the render method into a `ret`; Ctrl+F10 skips it at run time.
@@ -333,7 +334,7 @@ buttons: LB = L trigger (rewind), RB = R trigger (special action), LT = Black (a
 view, text code `\p5\l`), RT = White (look, `\p5\r`). `[controller] layout=xbox` swaps
 the two pairs back to the Xbox's places (LT/RT = L/R trigger, LB/RB = Black/White); the
 button prompts follow. Back is left unmapped because the
-PC port bound action 8 to "quit game"). The stick query is filled straight from the pad
+PC port bound action 8 to "quit game". The stick query is filled straight from the pad
 with a round dead zone.
 
 ### Vibration
@@ -423,7 +424,8 @@ held while it does. When it leaves, a camera within 3 units is blended over to i
 
 **Free camera:** the same detour writes a free-flying camera (yaw/pitch, position)
 into the main view's camera struct; the signs of the I/J rows are taken from the
-camera when it starts. Game input is withheld by the `GetActionValue` and stick hooks.
+camera when it starts. Game input is withheld by the `GetActionValue` and stick hooks,
+and the menu pad (`menupad.cpp`) ignores the controller meanwhile.
 Y / P sets the main loop's pause flag `0xaf4498` (`0x67ad90` then only renders), which
 freezes the world while the camera keeps moving.
 
