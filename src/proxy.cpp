@@ -1206,7 +1206,13 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
         GetModuleFileNameA(inst, path, MAX_PATH);
         char* slash = strrchr(path, '\\');
         if (slash) strcpy(slash + 1, "popfix.log");
-        g_log = fopen(path, "a");
+        // A new log per game start; the previous one (with its crash report, if
+        // any) is kept as popfix.old.log.
+        char old[MAX_PATH];
+        strcpy(old, path);
+        if (char* dot = strrchr(old, '.')) strcpy(dot, ".old.log");
+        MoveFileExA(path, old, MOVEFILE_REPLACE_EXISTING);
+        g_log = fopen(path, "w");
         SYSTEMTIME t;
         GetLocalTime(&t);
         Log("\n=== PoP water fix (dx.dll) loaded, pid %lu, %02d:%02d:%02d ===",

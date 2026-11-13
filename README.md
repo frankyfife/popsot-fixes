@@ -286,7 +286,7 @@ Keys in the game (the game window must be in the foreground):
 | Ctrl+F4 | next sword |
 
 Diagnostics (and a crash report, if the game crashes) are written to `popfix.log` in the
-game folder. Keys for debugging are described in
+game folder, new on every start; the previous one is kept as `popfix.old.log`. Keys for debugging are described in
 [docs/TECHNICAL.md](docs/TECHNICAL.md#debugging).
 
 ## Building
