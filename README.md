@@ -317,4 +317,11 @@ with Ubisoft or GOG and contains no game code or assets.
 
 ## License
 
-MIT – see [LICENSE](LICENSE).
+Copyright (C) 2026 frankyfife and contributors.
+
+This program is free software: you can redistribute it and/or modify it under the terms
+of the GNU General Public License as published by the Free Software Foundation, either
+version 3 of the License, or (at your option) any later version. It is distributed in the
+hope that it will be useful, but WITHOUT ANY WARRANTY; see [LICENSE](LICENSE) for details.
+
+Versions up to 1.0.2 were released under the MIT License.
