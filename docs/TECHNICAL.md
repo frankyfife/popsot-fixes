@@ -335,7 +335,18 @@ view, text code `\p5\l`), RT = White (look, `\p5\r`). `[controller] layout=xbox`
 the two pairs back to the Xbox's places (LT/RT = L/R trigger, LB/RB = Black/White); the
 button prompts follow. Back is left unmapped because the
 PC port bound action 8 to "quit game". The stick query is filled straight from the pad
-with a round dead zone.
+with a round dead zone. `[controller] invert_x` / `invert_y` negate the camera stick's
+result (mouse, keys and pad together) after that; the game's own "invert" option only
+covers the horizontal axis.
+
+### Display scaling
+
+`gpp.exe` declares no DPI awareness, so with Windows' display scaling above 100 % its
+window is scaled by the DWM: a window of the game's resolution is shown that much larger,
+reaching past the screen edges (the HUD at the edges is cut off, the menus move right and
+down). `dx.dll` declares the process per-monitor DPI aware (v2, else system aware) in its
+`DllMain`, before the game creates its window (`[ui] dpi_aware`). `popfix.log` notes the
+window's client size, the monitor size and its DPI when the device is created.
 
 ### Vibration
 

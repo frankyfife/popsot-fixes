@@ -8,6 +8,18 @@ Downloads are on the [Releases](https://github.com/frankyfife/popsot-fixes/relea
 
 ## What's new
 
+**1.1.0**
+* **Settings program** `popfix_config.exe`: every option of `popfix.ini` in one window,
+  with presets and a backup of the INI.
+* **Invert the camera** left / right and up / down (`[controller] invert_x` / `invert_y`);
+  the game's own option only has left / right.
+* **Display scaling:** with Windows' display scaling above 100 % the game's window was
+  enlarged past the screen edges, cutting off the HUD and moving the menus off centre. The
+  game now ignores the scaling (`[ui] dpi_aware`).
+* `popfix.log` is written new on every start (the previous one is `popfix.old.log`) and
+  notes the window size, monitor and DPI.
+* License: GNU GPL v3 or later.
+
 **1.0.2**
 * README: overview of the changes per version.
 
@@ -119,8 +131,13 @@ the balcony and blends over to the game's camera when it moves on.
 ### Menus and texts on wide screens
 Menus, texts and the HUD were laid out for 4:3 and stretched over the whole width. They
 keep their 4:3 proportions now, centred on the screen, like on the consoles; full-screen
-elements (fades, cutscene bars) still cover the whole screen. `[ui] scale` makes them
-smaller or larger, `[ui] aspect=0` restores the stretched layout.
+elements (fades, cutscene bars) still cover the whole screen. This works for any aspect
+ratio (16:10, 16:9, 21:9 ...). `[ui] scale` makes them smaller or larger, `[ui] aspect=0`
+restores the stretched layout.
+
+With Windows' display scaling above 100 % (common on laptops and 4K monitors), Windows
+would enlarge the game's window by that factor, so the picture reached past the screen
+edges. The game is now told to ignore the scaling (`[ui] dpi_aware=1`).
 
 ### Videos
 The videos are shown with their correct aspect ratio instead of stretched. Upscaled
@@ -226,6 +243,13 @@ pages is incomplete on PC, so the PC menus stay the default.
 All settings are optional. Copy `popfix.ini` next to `dx.dll`; every value in the sample
 file is the default.
 
+**`popfix_config.exe`** (in the release zip, next to `dx.dll` in the game folder) shows
+them in a window: one page per topic, a description of the option under the mouse, and
+the presets *Recommended* and *Close to the original*. Every change is saved at once
+and applies at the next start of the game. Comments and unknown keys in the INI stay as
+they are; before the first change the INI is kept as `popfix.ini.bak` (*Restore backup*
+puts it back). It needs nothing but Windows.
+
 | Setting | Default | Meaning |
 |---|---|---|
 | `[water] refraction` | `1.5` | refraction strength, 1.0 = Xbox (up to 10) |
@@ -242,10 +266,12 @@ file is the default.
 | `[textures] skip` | `0B0041BB` | pack textures to leave to the game (hex keys from `poptex_d3d9.log`; default: the font) |
 | `[ui] aspect` | `1` | menus, texts and HUD in 4:3 proportions, 0 = stretched like the original |
 | `[ui] scale` | `1` | size of menus, texts and HUD (0.25–2, e.g. 0.85 = smaller) |
+| `[ui] dpi_aware` | `1` | ignore Windows' display scaling (above 100 % the picture would reach past the screen edges) |
 | `[menus] camera_forward` / `camera_up` / `camera_side` | `3.5` / `6.25` / `0` | main-menu camera offset, 0 = original |
 | `[menus] camera_start` / `camera_end` | empty | menu picture / end of the new-game flight (`x y z yaw pitch`), stored with the free camera |
 | `[controller] layout` | `ps2` | shoulder buttons and triggers: `ps2` (LB/RB rewind / special action) or `xbox` (LT/RT) |
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
+| `[controller] invert_x` / `invert_y` | `0` / `0` | 1 = invert the camera and look direction left / right or up / down |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |
 | `[debug] verbose` | `0` | 1 = detailed diagnostics in `popfix.log` |
@@ -267,7 +293,7 @@ code it touches before changing it and switches itself off on an unknown build.
 1. In the game folder, rename GOG's `dx.dll` to `dx_gog.dll`.
 2. Download the zip from [Releases](https://github.com/frankyfife/popsot-fixes/releases)
    (or build it, see below) and copy its `dx.dll` into the game folder.
-3. Optional: copy `popfix.ini` next to it to change the settings.
+3. Optional: copy `popfix.ini` and `popfix_config.exe` next to it to change the settings.
 
 GOG's own compatibility layer keeps working; this DLL forwards everything to it.
 
@@ -292,8 +318,8 @@ game folder, new on every start; the previous one is kept as `popfix.old.log`. K
 ## Building
 
 Requires Visual Studio 2022 or newer – the Build Tools or any edition – with the C++
-x86/x64 tools. Run `build.bat` (it finds the installation with `vswhere`); the result is
-`build\dx.dll`.
+x86/x64 tools. Run `build.bat` (it finds the installation with `vswhere`); the results are
+`build\dx.dll` and `build\popfix_config.exe`.
 
 ## How it works
 
