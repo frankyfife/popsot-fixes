@@ -49,6 +49,7 @@ XINPUT_GAMEPAD g_pad;
 bool g_padConnected;
 bool g_blockGame;  // free camera active: the game gets no input (Start excepted)
 bool g_xboxLayout;  // [controller] layout=xbox: triggers and shoulders swapped, see PadValue
+bool g_invertX, g_invertY;  // [controller] invert_x / invert_y: camera look axes
 DWORD g_padSlot;  // XInput slot of g_pad
 DWORD g_padTick;
 
@@ -150,21 +151,23 @@ void __cdecl GetStickHook(int pad, float* out, int stick)
     }
     if (pad != 0 || !(*g_stickEnableMask & (1u << (stick + 24)))) return;  // stick disabled by the game
     RefreshPad();
-    if (!g_padConnected) return;
     float x, y;
     if (stick == 0) {
         // Movement: the stick replaces the keyboard direction while it is deflected.
-        if (Stick(g_pad.sThumbLX, g_pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, x, y)) {
+        if (g_padConnected && Stick(g_pad.sThumbLX, g_pad.sThumbLY, XINPUT_GAMEPAD_LEFT_THUMB_DEADZONE, x, y)) {
             out[0] = x;
             out[1] = y;
         }
-    } else {
-        // Camera: added on top of mouse and keys.
-        if (Stick(g_pad.sThumbRX, g_pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, x, y)) {
-            out[0] += x;
-            out[1] += y;
-        }
+        return;
     }
+    // Camera: added on top of mouse and keys; [controller] invert_x / invert_y
+    // turn the result round (the game's own option only has the horizontal axis).
+    if (g_padConnected && Stick(g_pad.sThumbRX, g_pad.sThumbRY, XINPUT_GAMEPAD_RIGHT_THUMB_DEADZONE, x, y)) {
+        out[0] += x;
+        out[1] += y;
+    }
+    if (g_invertX) out[0] = -out[0];
+    if (g_invertY) out[1] = -out[1];
 }
 
 // ---------------------------------------------------------------- button prompts
@@ -473,3 +476,9 @@ void Gamepad_Pulse(int count)
 void Gamepad_SetPromptMode(int mode) { g_promptMode = mode; }
 
 void Gamepad_SetXboxLayout(bool xbox) { g_xboxLayout = xbox; }
+
+void Gamepad_SetInvert(bool x, bool y)
+{
+    g_invertX = x;
+    g_invertY = y;
+}

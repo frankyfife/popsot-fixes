@@ -1029,15 +1029,31 @@ static void HookDevice(IDirect3DDevice9* dev, bool isEx)
 }
 
 // ---------------------------------------------------------------- IDirect3D9 hooks
+// The game window's size, its monitor and the display scaling, for reports of
+// a cut-off or shifted picture.
+static void LogWindow(HWND w)
+{
+    RECT r = {};
+    GetClientRect(w, &r);
+    MONITORINFO mi = { sizeof(mi) };
+    GetMonitorInfoA(MonitorFromWindow(w, MONITOR_DEFAULTTONEAREST), &mi);
+    typedef UINT(WINAPI * GetDpi_t)(HWND);
+    GetDpi_t getDpi = (GetDpi_t)GetProcAddress(GetModuleHandleA("user32.dll"), "GetDpiForWindow");
+    Log("window %ldx%ld, monitor %ldx%ld, %u dpi", r.right - r.left, r.bottom - r.top,
+        mi.rcMonitor.right - mi.rcMonitor.left, mi.rcMonitor.bottom - mi.rcMonitor.top, getDpi ? getDpi(w) : 96);
+}
+
 static HRESULT STDMETHODCALLTYPE hk_CreateDevice(IDirect3D9* d3d, UINT a, D3DDEVTYPE t, HWND w, DWORD f,
                                                  D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out)
 {
     if (pp) g_bbHeight = pp->BackBufferHeight;
     HRESULT hr = o_CreateDevice(d3d, a, t, w, f, pp, out);
-    Log("CreateDevice(flags 0x%lx, %ux%u) -> 0x%08lx", f, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0, hr);
+    Log("CreateDevice(flags 0x%lx, %ux%u, %s) -> 0x%08lx", f, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
+        pp && pp->Windowed ? "windowed" : "full screen", hr);
     if (SUCCEEDED(hr)) {
         g_gameWindow = pp && pp->hDeviceWindow ? pp->hDeviceWindow : w;
         MenuPad_SetWindow(g_gameWindow);
+        LogWindow(g_gameWindow);
     }
     if (SUCCEEDED(hr) && out && *out) {
         ReleaseShadows();
@@ -1198,6 +1214,29 @@ extern "C" HRESULT WINAPI Proxy_Direct3DCreate9On12Ex(UINT sdk, void* args, UINT
 }
 
 // ---------------------------------------------------------------- entry
+// A number from popfix.ini; a missing or empty value means the default.
+static float IniFloat(const char* section, const char* key, float def)
+{
+    char v[32];
+    GetPrivateProfileStringA(section, key, "", v, sizeof(v), g_iniPath);
+    return v[0] ? (float)atof(v) : def;
+}
+
+// Without DPI awareness Windows enlarges the game's window by the display
+// scaling (125 %, 150 %, ...): the picture then reaches past the screen edges,
+// cutting off the HUD and moving the menus off centre. [ui] dpi_aware.
+static void DpiAware()
+{
+    HMODULE user = GetModuleHandleA("user32.dll");
+    typedef BOOL(WINAPI * SetContext_t)(HANDLE);
+    SetContext_t set = user ? (SetContext_t)GetProcAddress(user, "SetProcessDpiAwarenessContext") : nullptr;
+    if (set && set((HANDLE)-4)) {  // DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        Log("DPI aware (per monitor)");
+        return;
+    }
+    Log(SetProcessDPIAware() ? "DPI aware (system)" : "DPI awareness not set (error %lu)", GetLastError());
+}
+
 BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
 {
     if (reason == DLL_PROCESS_ATTACH) {
@@ -1224,37 +1263,34 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             strcpy(g_iniPath, path);
             char v[32];
             g_verbose = GetPrivateProfileIntA("debug", "verbose", 0, g_iniPath) != 0;
-            GetPrivateProfileStringA("water", "refraction", "1.5", v, sizeof(v), g_iniPath);
-            float f = (float)atof(v);
+            if (GetPrivateProfileIntA("ui", "dpi_aware", 1, g_iniPath) != 0) DpiAware();
+            float f = IniFloat("water", "refraction", 1.5f);
             if (f > 0.0f && f <= 10.0f) g_refractScale = f;
             Water_Install(GetPrivateProfileIntA("water", "step_rate", 30, g_iniPath), g_verbose);
             if (GetPrivateProfileIntA("post", "blur", 1, g_iniPath) == 0) DisableBlurEffect();
             GetPrivateProfileStringA("post", "blur_radius", "auto", v, sizeof(v), g_iniPath);
-            g_blurRadius = _stricmp(v, "auto") == 0 ? 0.0f : (float)atof(v);
+            g_blurRadius = !v[0] || _stricmp(v, "auto") == 0 ? 0.0f : (float)atof(v);
             g_blurAfterGlow = GetPrivateProfileIntA("post", "blur_after_glow", 1, g_iniPath) != 0;
             int k = (int)GetPrivateProfileIntA("post", "blur_resolution", 4, g_iniPath);
             g_bigRTMaxFactor = k < 1 ? 1 : k > 4 ? 4 : k;
-            GetPrivateProfileStringA("menus", "camera_forward", "3.5", v, sizeof(v), g_iniPath);
-            g_menuCamForward = (float)atof(v);
-            GetPrivateProfileStringA("menus", "camera_up", "6.25", v, sizeof(v), g_iniPath);
-            g_menuCamUp = (float)atof(v);
-            GetPrivateProfileStringA("menus", "camera_side", "0", v, sizeof(v), g_iniPath);
-            g_menuCamSide = (float)atof(v);
+            g_menuCamForward = IniFloat("menus", "camera_forward", 3.5f);
+            g_menuCamUp = IniFloat("menus", "camera_up", 6.25f);
+            g_menuCamSide = IniFloat("menus", "camera_side", 0.0f);
             g_uiAspect = GetPrivateProfileIntA("ui", "aspect", 1, g_iniPath) != 0;
-            GetPrivateProfileStringA("ui", "scale", "1", v, sizeof(v), g_iniPath);
-            g_uiScale = (float)atof(v);
+            g_uiScale = IniFloat("ui", "scale", 1.0f);
             GetPrivateProfileStringA("textures", "pack", "poptex_d3d9.dll", g_texPack, sizeof(g_texPack), g_iniPath);
             g_texPackBloom = GetPrivateProfileIntA("textures", "bloom", 1, g_iniPath) != 0;
             GetPrivateProfileStringA("textures", "skip", "0B0041BB", g_texPackSkip, sizeof(g_texPackSkip), g_iniPath);
             GetPrivateProfileStringA("textures", "only", "hud", g_texPackOnly, sizeof(g_texPackOnly), g_iniPath);
             if (_stricmp(g_texPackOnly, "hud") == 0) strcpy(g_texPackOnly, kTexPackHud);
             else if (_stricmp(g_texPackOnly, "all") == 0) g_texPackOnly[0] = 0;
-            GetPrivateProfileStringA("textures", "brightness", "1.25", v, sizeof(v), g_iniPath);
-            g_texPackBrightness = (float)atof(v);
+            g_texPackBrightness = IniFloat("textures", "brightness", 1.25f);
             GetPrivateProfileStringA("controller", "prompts", "auto", v, sizeof(v), g_iniPath);
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
             GetPrivateProfileStringA("controller", "layout", "ps2", v, sizeof(v), g_iniPath);
             Gamepad_SetXboxLayout(_stricmp(v, "xbox") == 0);
+            Gamepad_SetInvert(GetPrivateProfileIntA("controller", "invert_x", 0, g_iniPath) != 0,
+                              GetPrivateProfileIntA("controller", "invert_y", 0, g_iniPath) != 0);
         }
         if (slash) {
             slash[1] = 0;
