@@ -1,7 +1,7 @@
 // popfix_config - settings for popfix.ini (Prince of Persia: The Sands of Time PC fixes)
 //
 // A plain Win32 program (static CRT, only Windows' own DLLs) with a dark look of its own. It edits the
-// popfix.ini next to it, or one picked with the file dialog. Values are changed in place, so comments, order
+// popfix.ini next to it; only when neither it nor the game is there, it asks for the file once at the start. Values are changed in place, so comments, order
 // and unknown keys stay as they are; a key that is missing is added to its section. Every change is saved at
 // once and applies at the next start of the game. dx.dll writes to the same file itself (cheats switched in
 // the game, the menu camera placed with the free camera), so the file is read again before every change and
@@ -632,7 +632,7 @@ static HWND Child(const char* cls, const char* text, DWORD style, int x, int y, 
     return h_;
 }
 
-enum { ID_NAV0 = 10, ID_PRESET0 = 30, ID_OPEN = 40, ID_CLOSE = 41, ID_RESTORE = 42, ID_SAVEAS = 43, ID_OPTION0 = 100 };
+enum { ID_NAV0 = 10, ID_PRESET0 = 30, ID_CLOSE = 41, ID_RESTORE = 42, ID_SAVEAS = 43, ID_OPTION0 = 100 };
 
 static void CreateControls()
 {
@@ -675,12 +675,10 @@ static void CreateControls()
                    S(66), 0, R_DIM, s_font);
     s_status = Child("STATIC", "", WS_VISIBLE | SS_LEFT | SS_PATHELLIPSIS | SS_CENTERIMAGE, S(kContentX), S(height - 88),
                      S(kWidth - kContentX - 24), S(28), 0, R_DIM, s_fontSmall);
-    Child("BUTTON", "Restore backup...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 522), S(height - 48), S(156),
+    Child("BUTTON", "Restore backup...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 406), S(height - 48), S(156),
           S(32), ID_RESTORE, R_ACTION, s_font);
-    Child("BUTTON", "Save as...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 356), S(height - 48), S(106), S(32),
+    Child("BUTTON", "Save as...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 240), S(height - 48), S(106), S(32),
           ID_SAVEAS, R_ACTION, s_font);
-    Child("BUTTON", "Open INI...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 240), S(height - 48), S(106), S(32),
-          ID_OPEN, R_ACTION, s_font);
     Child("BUTTON", "Close", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 124), S(height - 48), S(106), S(32),
           ID_CLOSE, R_ACTION, s_font);
 }
@@ -1105,8 +1103,6 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
             RestoreBackup(wnd);
         } else if (id == ID_SAVEAS) {
             SaveAs(wnd);
-        } else if (id == ID_OPEN) {
-            if (PickIni(wnd)) Open();
         } else if (id == ID_CLOSE) {
             DestroyWindow(wnd);
         }
