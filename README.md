@@ -11,6 +11,9 @@ Downloads are on the [Releases](https://github.com/frankyfife/popsot-fixes/relea
 **1.1.0**
 * **Settings program** `popfix_config.exe`: every option of `popfix.ini` in one window,
   with presets and a backup of the INI.
+* **HDR correction:** with Windows' HDR mode on, the game's SDR picture gets the dark tones
+  of a gamma 2.2 display and its own white level (`[video] hdr_white`, default 200 nits)
+  instead of Windows' sRGB curve at the SDR content brightness, where light sources glared.
 * **Invert the camera** left / right and up / down (`[controller] invert_x` / `invert_y`);
   the game's own option only has left / right.
 * **Display scaling:** with Windows' display scaling above 100 % the game's window was
@@ -155,6 +158,17 @@ hard, painted-looking edges. Small burned-in text (copyright lines,
 logo captions) comes out garbled from any AI upscaler, so it was set again in matching
 fonts on the upscaled frames instead.
 
+### Windows' HDR mode
+With "Use HDR" on, Windows shows SDR games itself: it decodes the picture with the sRGB
+curve and puts white at the "SDR content brightness" of the display settings. Against the
+gamma 2.2 display the game was made for, dark tones come out lifted, and every light
+source and glow shines at that white, often much brighter than on an SDR monitor. With
+HDR on, the fix gives the picture a last pass before it is shown: the tones of a gamma
+2.2 display, white at `[video] hdr_white` nits (default 200; at most Windows' SDR content
+brightness, which an SDR picture cannot exceed). Without HDR nothing changes. Auto HDR
+is not needed and best left off for this game. The pass costs a fraction of a
+millisecond of GPU time and adds no latency.
+
 ### EAX and surround sound
 The game's EAX 2 reverb and 3D sound need hardware DirectSound3D, which Windows no
 longer has. With [DSOAL](https://github.com/kcat/dsoal) in the game folder (`dsound.dll`,
@@ -273,6 +287,8 @@ puts it back). It needs nothing but Windows.
 | `[controller] prompts` | `auto` | button names in hints: `auto`, `controller` or `keyboard` |
 | `[controller] invert_x` / `invert_y` | `0` / `0` | 1 = invert the camera and look direction left / right or up / down |
 | `[video] keep_aspect` | `1` | 0 stretches the videos like the original |
+| `[video] hdr` | `1` | with Windows' HDR mode: gamma 2.2 tones and own white level, 0 = as Windows shows it |
+| `[video] hdr_white` | `200` | brightness of white in Windows' HDR mode, in nits (at most Windows' SDR content brightness) |
 | `[sound] eax` | `1` | switch 3D audio and EAX on when DSOAL is installed |
 | `[debug] verbose` | `0` | 1 = detailed diagnostics in `popfix.log` |
 | `[cheats] invulnerable` | `0` | the prince's life stays at its maximum |

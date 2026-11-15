@@ -36,6 +36,7 @@
 #include "texpack.h"
 #include "cheats.h"
 #include "water.h"
+#include "hdr.h"
 
 // ---------------------------------------------------------------- logging
 static FILE* g_log;
@@ -416,6 +417,7 @@ static void EndDraw(IDirect3DDevice9* dev, unsigned mask)
 static void OnReset(D3DPRESENT_PARAMETERS* pp)
 {
     ReleaseShadows();
+    Hdr_OnReset();
     g_numBig = 0;
     g_bigRT = 0;
     if (pp) g_bbHeight = pp->BackBufferHeight;
@@ -758,6 +760,21 @@ static HRESULT STDMETHODCALLTYPE hk_Present(IDirect3DDevice9* dev, const RECT* s
     Sound_OnFrame();
     Gamepad_OnFrame(g_gameWindow);
     if (g_verbose) Trace_ProbeMenuManager();
+    // Windows' HDR mode: the final pass, with the device functions behind our hooks
+    void** vt = *(void***)dev;
+    HdrDevice fn;
+    fn.CreateTexture = o_CreateTexture ? o_CreateTexture : (CreateTexture_t)vt[23];
+    fn.CreatePixelShader = o_CreatePixelShader ? o_CreatePixelShader : (CreatePixelShader_t)vt[106];
+    fn.StretchRect = o_StretchRect ? o_StretchRect : (StretchRect_t)vt[34];
+    fn.SetRenderTarget = o_SetRenderTarget ? o_SetRenderTarget : (SetRenderTarget_t)vt[37];
+    fn.SetViewport = o_SetViewport ? o_SetViewport : (SetViewport_t)vt[47];
+    fn.SetTexture = o_SetTexture ? o_SetTexture : (SetTexture_t)vt[65];
+    fn.SetSamplerState = o_SetSamplerState ? o_SetSamplerState : (SetSamplerState_t)vt[69];
+    fn.DrawPrimitiveUP = o_DrawPrimitiveUP ? o_DrawPrimitiveUP : (DrawPrimitiveUP_t)vt[83];
+    fn.SetFVF = o_SetFVF ? o_SetFVF : (SetFVF_t)vt[89];
+    fn.SetVertexShader = o_SetVertexShader ? o_SetVertexShader : (SetVertexShader_t)vt[92];
+    fn.SetPixelShader = o_SetPixelShader ? o_SetPixelShader : (SetPixelShader_t)vt[107];
+    Hdr_OnPresent(dev, fn);
     return o_Present(dev, sr, dr, w, rgn);
 }
 
@@ -1046,6 +1063,9 @@ static void LogWindow(HWND w)
 static HRESULT STDMETHODCALLTYPE hk_CreateDevice(IDirect3D9* d3d, UINT a, D3DDEVTYPE t, HWND w, DWORD f,
                                                  D3DPRESENT_PARAMETERS* pp, IDirect3DDevice9** out)
 {
+    // our references would keep the game's previous device alive (and with it
+    // full screen mode); it has released its own by now
+    Hdr_Release();
     if (pp) g_bbHeight = pp->BackBufferHeight;
     HRESULT hr = o_CreateDevice(d3d, a, t, w, f, pp, out);
     Log("CreateDevice(flags 0x%lx, %ux%u, %s) -> 0x%08lx", f, pp ? pp->BackBufferWidth : 0, pp ? pp->BackBufferHeight : 0,
@@ -1054,6 +1074,7 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDevice(IDirect3D9* d3d, UINT a, D3DDEV
         g_gameWindow = pp && pp->hDeviceWindow ? pp->hDeviceWindow : w;
         MenuPad_SetWindow(g_gameWindow);
         LogWindow(g_gameWindow);
+        Hdr_SetWindow(g_gameWindow);
     }
     if (SUCCEEDED(hr) && out && *out) {
         ReleaseShadows();
@@ -1067,9 +1088,11 @@ static HRESULT STDMETHODCALLTYPE hk_CreateDeviceEx(IDirect3D9Ex* d3d, UINT a, D3
                                                    D3DPRESENT_PARAMETERS* pp, D3DDISPLAYMODEEX* fm,
                                                    IDirect3DDevice9Ex** out)
 {
+    Hdr_Release();
     if (pp) g_bbHeight = pp->BackBufferHeight;
     HRESULT hr = o_CreateDeviceEx(d3d, a, t, w, f, pp, fm, out);
     Log("CreateDeviceEx(flags 0x%lx) -> 0x%08lx", f, hr);
+    if (SUCCEEDED(hr)) Hdr_SetWindow(pp && pp->hDeviceWindow ? pp->hDeviceWindow : w);
     if (SUCCEEDED(hr) && out && *out) {
         ReleaseShadows();
         g_waterPS = nullptr;
@@ -1289,6 +1312,7 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
             Gamepad_SetPromptMode(_stricmp(v, "controller") == 0 ? 1 : _stricmp(v, "keyboard") == 0 ? 2 : 0);
             GetPrivateProfileStringA("controller", "layout", "ps2", v, sizeof(v), g_iniPath);
             Gamepad_SetXboxLayout(_stricmp(v, "xbox") == 0);
+            Hdr_Configure(GetPrivateProfileIntA("video", "hdr", 1, g_iniPath), IniFloat("video", "hdr_white", 200.0f));
             Gamepad_SetInvert(GetPrivateProfileIntA("controller", "invert_x", 0, g_iniPath) != 0,
                               GetPrivateProfileIntA("controller", "invert_y", 0, g_iniPath) != 0);
         }

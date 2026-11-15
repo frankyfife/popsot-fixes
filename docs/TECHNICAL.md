@@ -564,6 +564,27 @@ and `0x674eeb`). `0x674c50` copies each frame (`BinkDoFrame`, `BinkCopyToBuffer`
   `0x674d20` is replaced by a function that also starts their replacement. When Bink
   loops (frame number going back), the decoding thread starts over.
 
+## Windows' HDR mode
+
+The game presents an 8-bit SDR back buffer (D3D9, no colour space of its own). With
+"Use HDR" on, the DWM composes it into the HDR output: decoded with the piecewise sRGB
+curve and scaled to the display's SDR white level ("SDR content brightness"). The game
+was made for gamma 2.2 displays, so its dark tones are lifted, and its whites (light
+sources, glows, sky) are shown at that white level, typically 200 to 480 nits.
+
+**Fix (`hdr.cpp`):** the HDR state (`advancedColorEnabled` without
+`wideColorEnforced`) and the SDR white level (`SDRWhiteLevel`, 1000 = 80 nits) of the
+game window's display come from `DisplayConfigGetDeviceInfo`, checked again every 3 s.
+In HDR mode, before each `Present` the back buffer is copied (`StretchRect`) into a
+render target texture and drawn back with a ps_2_0 shader (25 instructions, compiled at
+run time with Windows' `d3dcompiler_47.dll`): `v' = sRGB_encode(v^2.2 * k)` with
+`k = hdr_white / SDR white` (at most 1). Windows' sRGB decoding then gives gamma 2.2
+tones with white at `hdr_white` nits. Device state is kept in a state block, render
+target and depth buffer by hand; the device functions are called behind our own hooks
+so their bookkeeping is not touched. The copy texture and state block are released on
+`Reset` and, with the shader, before a new device is created (our references would keep
+the old device and its full screen mode alive).
+
 ## Sound
 
 The game creates DirectSound through Creative's `EAX.DLL` (`EAXDirectSoundCreate8`),

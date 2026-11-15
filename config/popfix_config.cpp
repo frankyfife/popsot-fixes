@@ -53,6 +53,8 @@ static Option kOptions[] = {
     { "post", "blur_resolution", CHOICE, "  Blur resolution", "Size of the blur targets. The original 512x512 is pixelated at modern resolutions; larger sizes are limited by the screen height.", "4", "4|Up to 4x;3|Up to 3x;2|Up to 2x;1|Original 512x512" },
     { "post", "blur_radius", CHOICE, "  Blur width", "Original: a wide halo around everything, which reads as ghosting. Sharp: as an upscaling emulator renders it.", "auto", "auto|Sharp, like an emulator;1|Original (wide halo)" },
     { "post", "blur_after_glow", BOOL_OPT, "  Blur includes the glow", "The original copies the frame before the glow, which leaves a grey ghost inside every glowing area. Needs a blur resolution of 2x or more.", "1" },
+    { "video", "hdr", BOOL_OPT, "HDR correction", "Only with Windows' HDR mode on (\"Use HDR\"): the game's SDR picture gets its own white level and the dark tones of a gamma 2.2 display, instead of Windows' sRGB curve at the SDR content brightness, which makes light sources glare.", "1" },
+    { "video", "hdr_white", RANGE, "  HDR white", "Brightness of the game's white in Windows' HDR mode, in nits. It cannot go above Windows' SDR content brightness (Settings, Display, HDR).", "200", 0, 80, 480, 10, 0 },
     { "video", "keep_aspect", BOOL_OPT, "Videos in their aspect ratio", "Black bars where needed. Off = stretched over the whole screen like the original.", "1" },
     // Interface
     { "ui", "aspect", BOOL_OPT, "Menus and HUD in 4:3", "Menus, texts and HUD keep their 4:3 proportions, centred on wide screens of any aspect ratio. Off = stretched like the original.", "1" },
@@ -87,7 +89,7 @@ static const int kOptionCount = sizeof(kOptions) / sizeof(kOptions[0]);
 static const char* const kPages[] = { "Graphics", "Interface", "Controller", "Textures", "Cheats", "Other" };
 static const int kPageCount = sizeof(kPages) / sizeof(kPages[0]);
 static const char* const kPageText[] = {
-    "Water, soft focus and videos.",
+    "Water, soft focus, HDR and videos.",
     "Menus, HUD and the main menu camera.",
     "Button layout, hints and camera direction.",
     "Evgeshajk's HD texture pack.",
@@ -423,6 +425,7 @@ static void ShowValue(Option& o, double v)
 {
     std::string text = FormatRange(o, v);
     if (!strcmp(o.key, "scale")) text = std::to_string((int)(v * 100 + 0.5)) + " %";
+    else if (!strcmp(o.key, "hdr_white")) text += " nits";
     else if (!strcmp(o.key, "refraction") || !strcmp(o.key, "brightness")) text += "x";
     else if (!strncmp(o.key, "camera_", 7)) text += v == 0 ? "  (original)" : "";
     SetWindowTextA(o.value, text.c_str());
@@ -447,7 +450,7 @@ static void UpdateEnables()
     bool big = atoi(Current("blur_resolution").c_str()) >= 2;
     struct { const char* key; bool on; } rules[] = {
         { "blur_resolution", blur }, { "blur_radius", blur }, { "blur_after_glow", blur && big },
-        { "only", pack }, { "brightness", pack }, { "bloom", pack }, { "skip", pack },
+        { "hdr_white", IsOn("hdr") }, { "only", pack }, { "brightness", pack }, { "bloom", pack }, { "skip", pack },
         { "camera_forward", !pose }, { "camera_up", !pose }, { "camera_side", !pose },
     };
     for (auto& r : rules) {
@@ -512,7 +515,7 @@ static const Preset kPresets[kPresetCount] = {
     { "Recommended", "Every option at its default: the look of the Xbox version, sharper.", "" },
     { "Close to the original", "The PC version's own look and layout where an option allows it (F10 in the game compares the rest).",
       "refraction=1.0;step_rate=0;blur_resolution=1;blur_radius=1;blur_after_glow=0;keep_aspect=0;aspect=0;"
-      "camera_forward=0;camera_up=0;camera_side=0;pack=" },
+      "camera_forward=0;camera_up=0;camera_side=0;pack=;hdr=0" },
 };
 static HWND s_preset[kPresetCount];
 
