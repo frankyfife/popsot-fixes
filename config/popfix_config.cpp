@@ -5,8 +5,9 @@
 // and unknown keys stay as they are; a key that is missing is added to its section. Every change is saved at
 // once and applies at the next start of the game. dx.dll writes to the same file itself (cheats switched in
 // the game, the menu camera placed with the free camera), so the file is read again before every change and
-// whenever the window is activated. Before the first change the INI as it was opened is kept as
-// popfix.ini.bak.
+// whenever the window is activated. Before the first change the INI as it was opened is saved to the folder
+// popfix_backups next to it; "Save as..." keeps the current settings in a file of one's own, "Restore
+// backup..." puts any saved INI back.
 #define WIN32_LEAN_AND_MEAN
 #ifndef _CRT_SECURE_NO_WARNINGS
 #define _CRT_SECURE_NO_WARNINGS
@@ -149,11 +150,32 @@ static bool LoadIni()
     return true;
 }
 
-// popfix.ini.bak: the INI as it was when the program opened it, written before the first change
+// Backups go to the folder popfix_backups next to the INI. Before the first change the INI as it was when the
+// program opened it is saved there, named with the date and time.
 static std::vector<std::string> s_opened;
 static bool s_backedUp;
 
-static std::string BackupPath() { return std::string(s_path) + ".bak"; }
+static std::string BackupDir()
+{
+    std::string d = s_path;
+    size_t slash = d.find_last_of("\\/");
+    return (slash == std::string::npos ? std::string() : d.substr(0, slash + 1)) + "popfix_backups";
+}
+
+static std::string Stamp()
+{
+    SYSTEMTIME t;
+    GetLocalTime(&t);
+    char buf[32];
+    sprintf(buf, "%04d-%02d-%02d_%02d%02d%02d", t.wYear, t.wMonth, t.wDay, t.wHour, t.wMinute, t.wSecond);
+    return buf;
+}
+
+static std::string BackupName(const char* suffix)
+{
+    CreateDirectoryA(BackupDir().c_str(), NULL);
+    return BackupDir() + "\\popfix_" + Stamp() + suffix + ".ini";
+}
 
 static bool SaveLines(const char* path, const std::vector<std::string>& lines)
 {
@@ -174,7 +196,7 @@ static bool SaveLines(const char* path, const std::vector<std::string>& lines)
 
 static bool SaveIni()
 {
-    if (!s_backedUp && !s_opened.empty()) s_backedUp = SaveLines(BackupPath().c_str(), s_opened);
+    if (!s_backedUp && !s_opened.empty()) s_backedUp = SaveLines(BackupName("").c_str(), s_opened);
     return SaveLines(s_path, s_lines);
 }
 
@@ -306,7 +328,7 @@ static int WindowDpi(HWND wnd)
 // Layout, in 96 dpi pixels. The height follows from the longest page and from the sidebar, so nothing is
 // cut off when options are added.
 static const int kWidth = 900, kSideW = 214, kContentX = 244, kLabelW = 300, kRowH = 34, kRowTop = 104,
-                 kNavTop = 104, kNavH = 42, kInfoH = 150;
+                 kNavTop = 104, kNavH = 42, kInfoH = 186;
 static const int kPresetCount = 2;
 
 static int MaxRows()
@@ -610,7 +632,7 @@ static HWND Child(const char* cls, const char* text, DWORD style, int x, int y, 
     return h_;
 }
 
-enum { ID_NAV0 = 10, ID_PRESET0 = 30, ID_OPEN = 40, ID_CLOSE = 41, ID_RESTORE = 42, ID_OPTION0 = 100 };
+enum { ID_NAV0 = 10, ID_PRESET0 = 30, ID_OPEN = 40, ID_CLOSE = 41, ID_RESTORE = 42, ID_SAVEAS = 43, ID_OPTION0 = 100 };
 
 static void CreateControls()
 {
@@ -651,10 +673,12 @@ static void CreateControls()
     }
     s_info = Child("STATIC", "", WS_VISIBLE | SS_LEFT, S(kContentX), S(height - kInfoH + 22), S(kWidth - kContentX - 24),
                    S(66), 0, R_DIM, s_font);
-    s_status = Child("STATIC", "", WS_VISIBLE | SS_LEFT | SS_PATHELLIPSIS | SS_CENTERIMAGE, S(kContentX), S(height - 46),
-                     S(kWidth - 404 - kContentX), S(30), 0, R_DIM, s_fontSmall);
-    Child("BUTTON", "Restore backup", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 390), S(height - 48), S(140),
+    s_status = Child("STATIC", "", WS_VISIBLE | SS_LEFT | SS_PATHELLIPSIS | SS_CENTERIMAGE, S(kContentX), S(height - 88),
+                     S(kWidth - kContentX - 24), S(28), 0, R_DIM, s_fontSmall);
+    Child("BUTTON", "Restore backup...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 522), S(height - 48), S(156),
           S(32), ID_RESTORE, R_ACTION, s_font);
+    Child("BUTTON", "Save as...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 356), S(height - 48), S(106), S(32),
+          ID_SAVEAS, R_ACTION, s_font);
     Child("BUTTON", "Open INI...", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 240), S(height - 48), S(106), S(32),
           ID_OPEN, R_ACTION, s_font);
     Child("BUTTON", "Close", WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW, S(kWidth - 124), S(height - 48), S(106), S(32),
@@ -693,23 +717,72 @@ static void Open()
     for (HWND b : s_preset) InvalidateRect(b, NULL, TRUE);
 }
 
-// puts the backup back and reloads it
+// a file dialog that starts in popfix_backups
+static bool BackupDialog(HWND owner, bool save, char* file, const char* title)
+{
+    std::string dir = BackupDir();
+    CreateDirectoryA(dir.c_str(), NULL);
+    OPENFILENAMEA ofn = { sizeof(ofn) };
+    ofn.hwndOwner = owner;
+    ofn.lpstrFilter = "INI files (*.ini)\0*.ini\0All files\0*.*\0";
+    ofn.lpstrFile = file;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrInitialDir = dir.c_str();
+    ofn.lpstrTitle = title;
+    ofn.lpstrDefExt = "ini";
+    ofn.Flags = OFN_HIDEREADONLY | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+    return (save ? GetSaveFileNameA(&ofn) : GetOpenFileNameA(&ofn)) != FALSE;
+}
+
+// puts any saved INI in place of the one being edited; the current settings are saved to popfix_backups first
 static void RestoreBackup(HWND wnd)
 {
-    std::string bak = BackupPath();
-    if (GetFileAttributesA(bak.c_str()) == INVALID_FILE_ATTRIBUTES) {
-        MessageBoxA(wnd, "There is no backup yet. It is made before the first change.", kTitle, MB_OK | MB_ICONINFORMATION);
+    char file[MAX_PATH] = "";
+    if (!BackupDialog(wnd, false, file, "Restore the settings from")) return;
+    if (!_stricmp(file, s_path)) {
+        Status("That is the INI being edited");
         return;
     }
-    std::string q = "Replace the settings with the backup?\n\n" + bak;
+    std::string q = std::string("Replace the settings with\n\n") + file +
+                    "\n\nThe current settings are saved to popfix_backups first.";
     if (MessageBoxA(wnd, q.c_str(), kTitle, MB_YESNO | MB_ICONQUESTION) != IDYES) return;
-    if (!CopyFileA(bak.c_str(), s_path, FALSE)) {
-        Status("Could not restore the backup");
+    std::string saved;
+    if (LoadIni() && !s_lines.empty()) {
+        saved = BackupName("_before_restore");
+        if (!SaveLines(saved.c_str(), s_lines)) {
+            Status("Could not save the current settings, nothing restored");
+            return;
+        }
+    }
+    // the chosen file is read and written in place through the temporary file, like every change
+    char current[MAX_PATH];
+    strcpy(current, s_path);
+    strcpy(s_path, file);
+    bool read = LoadIni();
+    strcpy(s_path, current);
+    if (!read || !SaveLines(s_path, s_lines)) {
+        Open();
+        Status("Could not restore the settings");
         return;
     }
     Open();
-    s_backedUp = true;  // keep the backup as it is
-    Status("Backup restored");
+    s_backedUp = true;  // the settings before are saved already
+    std::string msg = std::string("Restored from ") + file;
+    Status(msg.c_str());
+}
+
+// writes the current settings to a file of one's own (by default in popfix_backups)
+static void SaveAs(HWND wnd)
+{
+    char file[MAX_PATH];
+    sprintf(file, "popfix_%s.ini", Stamp().c_str());
+    if (!BackupDialog(wnd, true, file, "Save the current settings as")) return;
+    if (!LoadIni() || s_lines.empty()) {
+        Status("Nothing to save yet: there is no popfix.ini");
+        return;
+    }
+    std::string msg = SaveLines(file, s_lines) ? std::string("Saved as ") + file : std::string("Could not write ") + file;
+    Status(msg.c_str());
 }
 
 // ---------------------------------------------------------------- drawing
@@ -1030,6 +1103,8 @@ static LRESULT CALLBACK WndProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp)
             }
         } else if (id == ID_RESTORE) {
             RestoreBackup(wnd);
+        } else if (id == ID_SAVEAS) {
+            SaveAs(wnd);
         } else if (id == ID_OPEN) {
             if (PickIni(wnd)) Open();
         } else if (id == ID_CLOSE) {

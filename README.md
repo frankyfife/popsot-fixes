@@ -261,8 +261,11 @@ file is the default.
 them in a window: one page per topic, a description of the option under the mouse, and
 the presets *Recommended* and *Close to the original*. Every change is saved at once
 and applies at the next start of the game. Comments and unknown keys in the INI stay as
-they are; before the first change the INI is kept as `popfix.ini.bak` (*Restore backup*
-puts it back). It needs nothing but Windows.
+they are. Backups go to the folder `popfix_backups` next to the INI: before the first
+change the INI as it was is saved there, with the date and time in its name. *Save as...*
+keeps the current settings in a file of your own (in that folder by default), *Restore
+backup...* puts any saved INI back (the settings before it are saved first). It needs
+nothing but Windows.
 
 | Setting | Default | Meaning |
 |---|---|---|
